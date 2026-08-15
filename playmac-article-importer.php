@@ -2,7 +2,7 @@
 /**
  * Plugin Name: PlayMac 文章自动补全
  * Description: 从 Steam 或 Macked 链接生成 PlayMac 游戏、软件文章草稿，并使用已验证的千帆图片外链。
- * Version: 2.0.2
+ * Version: 2.0.3
  * Author: PlayMac
  */
 
@@ -10,12 +10,12 @@ defined('ABSPATH') || exit;
 
 final class PlayMac_Article_Importer
 {
-    private const VERSION = '2.0.2';
+    private const VERSION = '2.0.3';
     private const AJAX_ACTION = 'playmac_article_import';
     private const GITHUB_OWNER = 'summer0607';
     private const GITHUB_REPOSITORY = 'playmac-article-autofill-plugin';
     private const GITHUB_ASSET = 'playmac-article-importer.zip';
-    private const UPDATE_CACHE_KEY = 'playmac_article_importer_github_release_v2';
+    private const UPDATE_CACHE_PREFIX = 'playmac_article_importer_github_release_';
     private const META_SOURCE_URL = '_playmac_import_source_url';
     private const META_SOURCE_KIND = '_playmac_import_source_kind';
     private const META_MISSING = '_playmac_import_missing_fields';
@@ -31,7 +31,9 @@ final class PlayMac_Article_Importer
         add_action('admin_post_playmac_article_importer_initialize', array(__CLASS__, 'initialize_runtime'));
         add_action('admin_post_playmac_article_importer_qianfan_login', array(__CLASS__, 'qianfan_login'));
         add_action('admin_post_playmac_article_importer_qianfan_test', array(__CLASS__, 'qianfan_test'));
+        add_action('admin_post_playmac_article_importer_refresh_update', array(__CLASS__, 'refresh_github_update'));
         add_filter('pre_set_site_transient_update_plugins', array(__CLASS__, 'inject_github_update'));
+        add_filter('site_transient_update_plugins', array(__CLASS__, 'inject_github_update'));
         add_filter('plugins_api', array(__CLASS__, 'github_plugin_info'), 20, 3);
         add_filter('plugin_action_links_' . plugin_basename(__FILE__), array(__CLASS__, 'add_update_link'));
     }
@@ -44,7 +46,7 @@ final class PlayMac_Article_Importer
 
     private static function github_release(): array
     {
-        $cached = get_site_transient(self::UPDATE_CACHE_KEY);
+        $cached = get_site_transient(self::update_cache_key());
         if (is_array($cached)) {
             return $cached;
         }
@@ -80,8 +82,13 @@ final class PlayMac_Article_Importer
             'url' => esc_url_raw((string) ($body['html_url'] ?? '')),
             'notes' => wp_kses_post((string) ($body['body'] ?? '')),
         );
-        set_site_transient(self::UPDATE_CACHE_KEY, $release, 15 * MINUTE_IN_SECONDS);
+        set_site_transient(self::update_cache_key(), $release, 15 * MINUTE_IN_SECONDS);
         return $release;
+    }
+
+    private static function update_cache_key(): string
+    {
+        return self::UPDATE_CACHE_PREFIX . str_replace('.', '_', self::VERSION);
     }
 
     public static function inject_github_update($transient)
@@ -129,8 +136,25 @@ final class PlayMac_Article_Importer
 
     public static function add_update_link(array $links): array
     {
-        $links[] = '<a href="' . esc_url(admin_url('update-core.php?force-check=1')) . '">检查 GitHub 更新</a>';
+        $url = wp_nonce_url(
+            admin_url('admin-post.php?action=playmac_article_importer_refresh_update'),
+            'playmac_article_importer_refresh_update'
+        );
+        $links[] = '<a href="' . esc_url($url) . '">检查 GitHub 更新</a>';
         return $links;
+    }
+
+    public static function refresh_github_update(): void
+    {
+        if (!current_user_can('update_plugins')) {
+            wp_die('你没有更新插件的权限。', 403);
+        }
+        check_admin_referer('playmac_article_importer_refresh_update');
+        delete_site_transient(self::update_cache_key());
+        delete_site_transient('update_plugins');
+        wp_update_plugins();
+        wp_safe_redirect(add_query_arg('playmac_update_checked', '1', self_admin_url('plugins.php')));
+        exit;
     }
 
     public static function render_panel(WP_Post $post): void

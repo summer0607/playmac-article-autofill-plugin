@@ -19,7 +19,7 @@
 
 ## GitHub 更新
 
-插件会读取本仓库的 GitHub Release。发布新版本时推送 `v版本号` 标签，GitHub 会自动生成安装包和 Release；已安装的网站会在 WordPress 插件更新页提示更新，也可以在插件列表点击“检查 GitHub 更新”。
+插件会读取本仓库的 GitHub Release。发布新版本时推送 `v版本号` 标签，GitHub 会自动生成安装包和 Release；已安装的网站会在 WordPress 插件更新页提示更新，也可以在插件列表点击“检查 GitHub 更新”，立即清除旧缓存并刷新更新状态。
 
 ## 发布新版本
 
