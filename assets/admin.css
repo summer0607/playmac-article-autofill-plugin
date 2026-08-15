@@ -1,0 +1,71 @@
+.playmac-article-importer {
+    margin: 14px 0 18px;
+    padding: 18px;
+    border: 1px solid #c3c4c7;
+    border-left: 4px solid #2271b1;
+    border-radius: 4px;
+    background: #fff;
+    box-shadow: 0 1px 1px rgba(0, 0, 0, .04);
+}
+
+.playmac-article-importer__heading,
+.playmac-article-importer__controls {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.playmac-article-importer__heading {
+    justify-content: space-between;
+    margin-bottom: 14px;
+}
+
+.playmac-article-importer__heading h2,
+.playmac-article-importer__heading p,
+.playmac-article-importer__status,
+.playmac-article-importer__missing {
+    margin: 0;
+}
+
+.playmac-article-importer__heading p {
+    margin-top: 4px;
+    color: #646970;
+}
+
+.playmac-article-importer__badge {
+    flex: none;
+    padding: 4px 9px;
+    border-radius: 999px;
+    color: #135e96;
+    background: #e7f3ff;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+#playmac-import-source-url {
+    flex: 1;
+    min-width: 260px;
+}
+
+.playmac-article-importer__status,
+.playmac-article-importer__missing {
+    margin-top: 12px;
+}
+
+.playmac-article-importer__status.is-loading { color: #135e96; }
+.playmac-article-importer__status.is-error,
+.playmac-article-importer__missing { color: #b32d2e; }
+.playmac-article-importer__status.is-success { color: #008a20; }
+
+@media (max-width: 782px) {
+    .playmac-article-importer__heading,
+    .playmac-article-importer__controls {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    #playmac-import-source-url {
+        width: 100%;
+        min-width: 0;
+    }
+}
