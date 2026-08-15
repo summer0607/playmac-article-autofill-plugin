@@ -13,7 +13,7 @@ final class PlayMac_Article_Importer
     private const VERSION = '2.0.0';
     private const AJAX_ACTION = 'playmac_article_import';
     private const GITHUB_OWNER = 'summer0607';
-    private const GITHUB_REPOSITORY = 'playmac文章自动填充插件';
+    private const GITHUB_REPOSITORY = 'playmac-article-autofill-plugin';
     private const GITHUB_ASSET = 'playmac-article-importer.zip';
     private const UPDATE_CACHE_KEY = 'playmac_article_importer_github_release';
     private const META_SOURCE_URL = '_playmac_import_source_url';

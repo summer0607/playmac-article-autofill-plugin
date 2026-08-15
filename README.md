@@ -1,5 +1,7 @@
 # PlayMac 文章自动填充插件
 
+仓库地址使用英文 `playmac-article-autofill-plugin`，以确保 GitHub Release 更新链接稳定；插件名称和说明保持中文。
+
 在 WordPress 文章编辑页顶部粘贴 Steam 商店链接或 Macked 软件介绍链接，插件会在正式网站内生成并保存草稿，不依赖本机电脑、控制台或外部文章助手。
 
 - Steam：补全游戏标题、正文、分类、标签、资源信息和 SEO；Steam 无法提供成品版本、大小与价格，因此明确列为“待填写”。
