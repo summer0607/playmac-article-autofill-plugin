@@ -2,7 +2,7 @@
 /**
  * Plugin Name: PlayMac 文章自动补全
  * Description: 从 Steam 或 Macked 链接生成 PlayMac 游戏、软件文章草稿，并使用已验证的千帆图片外链。
- * Version: 2.0.1
+ * Version: 2.0.2
  * Author: PlayMac
  */
 
@@ -10,12 +10,12 @@ defined('ABSPATH') || exit;
 
 final class PlayMac_Article_Importer
 {
-    private const VERSION = '2.0.1';
+    private const VERSION = '2.0.2';
     private const AJAX_ACTION = 'playmac_article_import';
     private const GITHUB_OWNER = 'summer0607';
     private const GITHUB_REPOSITORY = 'playmac-article-autofill-plugin';
     private const GITHUB_ASSET = 'playmac-article-importer.zip';
-    private const UPDATE_CACHE_KEY = 'playmac_article_importer_github_release';
+    private const UPDATE_CACHE_KEY = 'playmac_article_importer_github_release_v2';
     private const META_SOURCE_URL = '_playmac_import_source_url';
     private const META_SOURCE_KIND = '_playmac_import_source_kind';
     private const META_MISSING = '_playmac_import_missing_fields';
@@ -80,7 +80,7 @@ final class PlayMac_Article_Importer
             'url' => esc_url_raw((string) ($body['html_url'] ?? '')),
             'notes' => wp_kses_post((string) ($body['body'] ?? '')),
         );
-        set_site_transient(self::UPDATE_CACHE_KEY, $release, 12 * HOUR_IN_SECONDS);
+        set_site_transient(self::UPDATE_CACHE_KEY, $release, 15 * MINUTE_IN_SECONDS);
         return $release;
     }
 
