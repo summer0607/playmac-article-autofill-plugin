@@ -16,8 +16,14 @@ rsync -a --delete \
   --exclude='tests/' \
   --exclude='scripts/' \
   --exclude='.github/' \
+  --exclude='.dockerignore' \
   --exclude='.DS_Store' \
+  --exclude='Dockerfile' \
+  --exclude='docker-compose.yml' \
+  --exclude='runtime/' \
+  --exclude='service/' \
   "$ROOT_DIR/" "$PLUGIN_DIR/"
+rm -f "$OUTPUT_DIR/playmac-article-importer.zip"
 (cd "$STAGING_DIR" && zip -qry "$OUTPUT_DIR/playmac-article-importer.zip" playmac-article-importer)
 unzip -t "$OUTPUT_DIR/playmac-article-importer.zip" >/dev/null
 echo "$OUTPUT_DIR/playmac-article-importer.zip"

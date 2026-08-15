@@ -7,9 +7,32 @@ on:
 
 permissions:
   contents: write
+  packages: write
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.0'
+      - run: python -m pip install -r runtime/requirements.txt
+      - run: php -l playmac-article-importer.php
+      - run: python -m unittest discover -s tests -v
+      - run: python -m py_compile runtime/playmac_article_worker.py service/runtime_server.py
+      - run: bash -n scripts/build-release.sh
+      - run: bash scripts/build-release.sh
+      - run: |
+          if unzip -Z1 dist/playmac-article-importer.zip | grep -Eq '(^|/)(runtime|service)/|Dockerfile|docker-compose'; then
+            exit 1
+          fi
+
   release:
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -20,3 +43,26 @@ jobs:
         with:
           generate_release_notes: true
           files: dist/playmac-article-importer.zip
+
+  runtime:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: |
+            PLAYMAC_RUNTIME_VERSION=${{ github.ref_name }}
+          tags: |
+            ghcr.io/summer0607/playmac-article-autofill-runtime:latest
+            ghcr.io/summer0607/playmac-article-autofill-runtime:${{ github.ref_name }}

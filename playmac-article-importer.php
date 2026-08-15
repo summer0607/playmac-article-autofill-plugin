@@ -2,7 +2,7 @@
 /**
  * Plugin Name: PlayMac 文章自动补全
  * Description: 从 Steam 或 Macked 链接生成 PlayMac 游戏、软件文章草稿，并使用已验证的千帆图片外链。
- * Version: 2.0.4
+ * Version: 3.0.0
  * Author: PlayMac
  */
 
@@ -10,8 +10,9 @@ defined('ABSPATH') || exit;
 
 final class PlayMac_Article_Importer
 {
-    private const VERSION = '2.0.4';
+    private const VERSION = '3.0.0';
     private const AJAX_ACTION = 'playmac_article_import';
+    private const AJAX_STATUS_ACTION = 'playmac_article_import_status';
     private const GITHUB_OWNER = 'summer0607';
     private const GITHUB_REPOSITORY = 'playmac-article-autofill-plugin';
     private const GITHUB_ASSET = 'playmac-article-importer.zip';
@@ -19,12 +20,14 @@ final class PlayMac_Article_Importer
     private const META_SOURCE_URL = '_playmac_import_source_url';
     private const META_SOURCE_KIND = '_playmac_import_source_kind';
     private const META_MISSING = '_playmac_import_missing_fields';
+    private const META_JOB_ID = '_playmac_import_job_id';
 
     public static function boot(): void
     {
         add_action('edit_form_top', array(__CLASS__, 'render_panel'));
         add_action('admin_enqueue_scripts', array(__CLASS__, 'enqueue_assets'));
         add_action('wp_ajax_' . self::AJAX_ACTION, array(__CLASS__, 'ajax_import'));
+        add_action('wp_ajax_' . self::AJAX_STATUS_ACTION, array(__CLASS__, 'ajax_import_status'));
         add_action('admin_menu', array(__CLASS__, 'register_settings_page'));
         add_action('admin_init', array(__CLASS__, 'register_settings'));
         add_action('admin_notices', array(__CLASS__, 'render_import_notice'));
@@ -97,10 +100,13 @@ final class PlayMac_Article_Importer
             return $transient;
         }
         $release = self::github_release();
+        $plugin = plugin_basename(__FILE__);
         if (!$release || version_compare($release['version'], self::VERSION, '<=')) {
+            if (isset($transient->response[$plugin]) && version_compare((string) $transient->response[$plugin]->new_version, self::VERSION, '<=')) {
+                unset($transient->response[$plugin]);
+            }
             return $transient;
         }
-        $plugin = plugin_basename(__FILE__);
         $transient->response[$plugin] = (object) array(
             'slug' => 'playmac-article-importer',
             'plugin' => $plugin,
@@ -219,8 +225,10 @@ final class PlayMac_Article_Importer
         wp_localize_script('playmac-article-importer', 'PlayMacArticleImporter', array(
             'ajaxUrl' => admin_url('admin-ajax.php'),
             'action' => self::AJAX_ACTION,
+            'statusAction' => self::AJAX_STATUS_ACTION,
             'nonce' => wp_create_nonce(self::AJAX_ACTION),
             'postId' => get_the_ID(),
+            'jobId' => sanitize_key((string) get_post_meta(get_the_ID(), self::META_JOB_ID, true)),
         ));
     }
 
@@ -241,125 +249,108 @@ final class PlayMac_Article_Importer
         }
 
         $lock_key = 'playmac_article_import_' . get_current_user_id();
+        $existing_job = sanitize_key((string) get_post_meta($post_id, self::META_JOB_ID, true));
+        if ($existing_job !== '') {
+            wp_send_json_success(array('status' => 'running', 'job_id' => $existing_job));
+        }
         if (get_transient($lock_key)) {
             wp_send_json_error(array('message' => '已有导入任务正在运行，请稍候。'), 429);
         }
-        set_transient($lock_key, 1, 5 * MINUTE_IN_SECONDS);
+        set_transient($lock_key, 1, 15 * MINUTE_IN_SECONDS);
 
         try {
-            $payload = self::request_worker($source_url);
-            $result = self::apply_payload($post_id, $payload);
-            delete_transient($lock_key);
-            wp_send_json_success($result);
+            $result = self::runtime_request('POST', '/v1/jobs/import', array('source' => $source_url), 15);
+            $job_id = sanitize_key((string) ($result['payload']['job_id'] ?? ''));
+            if (empty($result['success']) || strlen($job_id) !== 32) {
+                throw new RuntimeException((string) ($result['error'] ?? '服务器组件未返回有效任务。'));
+            }
+            update_post_meta($post_id, self::META_JOB_ID, $job_id);
+            wp_send_json_success(array('status' => 'running', 'job_id' => $job_id));
         } catch (Throwable $throwable) {
             delete_transient($lock_key);
             wp_send_json_error(array('message' => $throwable->getMessage()), 422);
         }
     }
 
-    private static function request_worker(string $source_url): array
+    public static function ajax_import_status(): void
     {
-        $decoded = self::run_worker(array('import', '--source', $source_url), 300);
-        if (empty($decoded['success'])) {
-            throw new RuntimeException((string) ($decoded['error'] ?? '文章资料生成失败。'));
+        check_ajax_referer(self::AJAX_ACTION, 'nonce');
+        $post_id = isset($_POST['post_id']) ? absint($_POST['post_id']) : 0;
+        if (!$post_id || !current_user_can('edit_post', $post_id)) {
+            wp_send_json_error(array('message' => '你没有编辑这篇文章的权限。'), 403);
         }
-        $payload = $decoded['payload'] ?? null;
-        if (!is_array($payload)) {
-            throw new RuntimeException('本机文章助手返回的数据不完整。');
+        $job_id = sanitize_key((string) ($_POST['job_id'] ?? get_post_meta($post_id, self::META_JOB_ID, true)));
+        if (strlen($job_id) !== 32) {
+            wp_send_json_error(array('message' => '没有可恢复的文章任务。'), 404);
         }
-        self::validate_payload($payload);
-        return $payload;
-    }
-
-    private static function runtime_dir(): string
-    {
-        return plugin_dir_path(__FILE__) . 'runtime';
-    }
-
-    private static function runtime_python(): string
-    {
-        return self::runtime_dir() . '/.venv/bin/python';
-    }
-
-    private static function session_file(): string
-    {
-        $directory = trailingslashit(get_temp_dir()) . 'playmac-article-importer-' . substr(hash_hmac('sha256', site_url(), wp_salt('auth')), 0, 24);
-        if (!is_dir($directory)) {
-            wp_mkdir_p($directory);
-            @chmod($directory, 0700);
-        }
-        return trailingslashit($directory) . 'qianfan-session.json';
-    }
-
-    private static function run_worker(array $arguments, int $timeout, string $input = ''): array
-    {
-        $process_error = self::worker_process_error();
-        if ($process_error !== '') {
-            throw new RuntimeException($process_error);
-        }
-        $python = self::runtime_python();
-        $worker = self::runtime_dir() . '/playmac_article_worker.py';
-        if (!is_file($python) || !is_file($worker)) {
-            throw new RuntimeException('插件运行环境尚未初始化，请先到设置页完成初始化。');
-        }
-        $command = array_merge(array($python, $worker), $arguments, array('--session', self::session_file()));
-        $pipes = array();
-        $process = proc_open($command, array(
-            0 => array('pipe', 'r'),
-            1 => array('pipe', 'w'),
-            2 => array('pipe', 'w'),
-        ), $pipes, self::runtime_dir());
-        if (!is_resource($process)) {
-            throw new RuntimeException('无法启动插件文章处理器。');
-        }
-        if ($input !== '') {
-            fwrite($pipes[0], $input);
-        }
-        fclose($pipes[0]);
-        stream_set_blocking($pipes[1], false);
-        stream_set_blocking($pipes[2], false);
-        $stdout = '';
-        $stderr = '';
-        $started = time();
-        do {
-            $stdout .= stream_get_contents($pipes[1]);
-            $stderr .= stream_get_contents($pipes[2]);
-            $state = proc_get_status($process);
-            if (!$state['running']) {
-                break;
+        $lock_key = 'playmac_article_import_' . get_current_user_id();
+        try {
+            $result = self::runtime_request('GET', '/v1/jobs/' . rawurlencode($job_id), null, 15);
+            $status = sanitize_key((string) ($result['status'] ?? ''));
+            if ($status === 'running') {
+                set_transient($lock_key, 1, 15 * MINUTE_IN_SECONDS);
+                wp_send_json_success(array('status' => 'running', 'job_id' => $job_id));
             }
-            if (time() - $started > $timeout) {
-                proc_terminate($process, 9);
-                throw new RuntimeException('文章处理超时，请稍后重试。');
+            if ($status !== 'complete' || empty($result['success'])) {
+                throw new RuntimeException((string) ($result['error'] ?? '文章任务失败。'));
             }
-            usleep(100000);
-        } while (true);
-        $stdout .= stream_get_contents($pipes[1]);
-        $stderr .= stream_get_contents($pipes[2]);
-        fclose($pipes[1]);
-        fclose($pipes[2]);
-        $exit_code = proc_close($process);
-        $decoded = json_decode(trim($stdout), true);
+            $payload = $result['payload'] ?? null;
+            if (!is_array($payload)) {
+                throw new RuntimeException('服务器组件返回的数据不完整。');
+            }
+            self::validate_payload($payload);
+            $saved = self::apply_payload($post_id, $payload);
+            delete_post_meta($post_id, self::META_JOB_ID);
+            delete_transient($lock_key);
+            $saved['status'] = 'complete';
+            wp_send_json_success($saved);
+        } catch (Throwable $throwable) {
+            delete_post_meta($post_id, self::META_JOB_ID);
+            delete_transient($lock_key);
+            wp_send_json_error(array('message' => $throwable->getMessage()), 422);
+        }
+    }
+
+    private static function runtime_url(): string
+    {
+        $url = defined('PLAYMAC_ARTICLE_RUNTIME_URL') ? PLAYMAC_ARTICLE_RUNTIME_URL : 'http://127.0.0.1:18990';
+        return untrailingslashit((string) $url);
+    }
+
+    private static function runtime_token(): string
+    {
+        return defined('PLAYMAC_ARTICLE_RUNTIME_TOKEN') ? trim((string) PLAYMAC_ARTICLE_RUNTIME_TOKEN) : '';
+    }
+
+    private static function runtime_request(string $method, string $path, ?array $payload, int $timeout): array
+    {
+        $headers = array('Accept' => 'application/json');
+        $token = self::runtime_token();
+        if ($token !== '') {
+            $headers['Authorization'] = 'Bearer ' . $token;
+        }
+        $arguments = array(
+            'method' => $method,
+            'timeout' => $timeout,
+            'headers' => $headers,
+        );
+        if ($payload !== null) {
+            $arguments['headers']['Content-Type'] = 'application/json; charset=utf-8';
+            $arguments['body'] = wp_json_encode($payload);
+        }
+        $response = wp_remote_request(self::runtime_url() . $path, $arguments);
+        if (is_wp_error($response)) {
+            throw new RuntimeException('服务器组件未连接，请确认常驻组件已经启动。');
+        }
+        $decoded = json_decode((string) wp_remote_retrieve_body($response), true);
         if (!is_array($decoded)) {
-            $detail = trim($stderr);
-            throw new RuntimeException($detail ?: ($exit_code === 0 ? '文章处理器返回异常。' : '文章处理器运行失败。'));
+            throw new RuntimeException('服务器组件返回格式异常。');
+        }
+        $code = wp_remote_retrieve_response_code($response);
+        if ($code >= 400 && empty($decoded['error'])) {
+            throw new RuntimeException('服务器组件请求失败。');
         }
         return $decoded;
-    }
-
-    private static function worker_process_error(): string
-    {
-        $required = array('proc_open', 'proc_get_status', 'proc_close', 'proc_terminate');
-        $disabled = array();
-        foreach ($required as $function) {
-            if (!function_exists($function)) {
-                $disabled[] = $function;
-            }
-        }
-        if (!$disabled) {
-            return '';
-        }
-        return '服务器未开启插件所需的进程权限，暂时不能登录千帆或生成文章。请在宝塔 PHP 设置的“禁用函数”中移除：' . implode('、', $disabled) . '。';
     }
 
     private static function validate_payload(array $payload): void
@@ -542,14 +533,14 @@ final class PlayMac_Article_Importer
         ?>
         <div class="wrap">
             <h1>PlayMac 文章自动补全</h1>
-            <p>所有资料读取和图片处理均由本插件在网站服务器内完成，不连接本机电脑或外部控制台。</p>
+            <p>所有资料读取和图片处理均由网站服务器内的常驻组件完成，不连接本机电脑或外部控制台。</p>
             <?php self::render_settings_notice(); ?>
-            <h2>第一步：初始化</h2>
-            <p>首次安装时，插件会安装自己的图片处理组件。完成后不需要保持其他程序运行。</p>
+            <h2>第一步：检查服务器组件</h2>
+            <p>常驻组件独立运行，插件更新不会删除它，也不需要 PHP 启动或安装 Python。</p>
             <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
                 <input type="hidden" name="action" value="playmac_article_importer_initialize" />
                 <?php wp_nonce_field('playmac_article_importer_initialize'); ?>
-                <?php submit_button(is_file(self::runtime_python()) ? '重新检查组件' : '初始化插件组件', 'secondary', 'submit', false); ?>
+                <?php submit_button('测试服务器组件', 'secondary', 'submit', false); ?>
             </form>
             <hr />
             <h2>第二步：登录千帆图片空间</h2>
@@ -587,29 +578,16 @@ final class PlayMac_Article_Importer
             wp_die('你没有执行此操作的权限。', 403);
         }
         check_admin_referer('playmac_article_importer_initialize');
-        @set_time_limit(300);
-        $process_error = self::worker_process_error();
-        if ($process_error !== '') {
-            self::redirect_settings('error', $process_error);
+        try {
+            $result = self::runtime_request('GET', '/health', null, 10);
+            if (empty($result['success']) || ($result['payload']['status'] ?? '') !== 'ready') {
+                self::redirect_settings('error', (string) ($result['error'] ?? '服务器组件尚未就绪。'));
+            }
+            $version = sanitize_text_field((string) ($result['payload']['version'] ?? ''));
+            self::redirect_settings('success', '服务器组件连接正常' . ($version !== '' ? '，版本：' . $version : '') . '。');
+        } catch (Throwable $throwable) {
+            self::redirect_settings('error', $throwable->getMessage() ?: '服务器组件连接失败。');
         }
-        $script = self::runtime_dir() . '/install-runtime.sh';
-        if (!is_file($script)) {
-            self::redirect_settings('error', '插件初始化文件缺失，请重新安装插件。');
-        }
-        $pipes = array();
-        $process = proc_open(array('/bin/bash', $script), array(1 => array('pipe', 'w'), 2 => array('pipe', 'w')), $pipes, self::runtime_dir());
-        if (!is_resource($process)) {
-            self::redirect_settings('error', '无法启动插件初始化。');
-        }
-        $stdout = stream_get_contents($pipes[1]);
-        $stderr = stream_get_contents($pipes[2]);
-        fclose($pipes[1]);
-        fclose($pipes[2]);
-        $status = proc_close($process);
-        if ($status !== 0 || !is_file(self::runtime_python())) {
-            self::redirect_settings('error', trim($stderr) ?: '插件组件初始化失败。');
-        }
-        self::redirect_settings('success', '插件组件已准备完成。');
     }
 
     public static function qianfan_login(): void
@@ -625,11 +603,7 @@ final class PlayMac_Article_Importer
             self::redirect_settings('error', '请填写千帆账号和密码。');
         }
         try {
-            $result = self::run_worker(
-                array('login', '--credentials-stdin'),
-                120,
-                wp_json_encode(array('email' => $email, 'password' => $password))
-            );
+            $result = self::runtime_request('POST', '/v1/login', array('email' => $email, 'password' => $password), 120);
             if (empty($result['success'])) {
                 self::redirect_settings('error', (string) ($result['error'] ?? '千帆登录失败。'));
             }
@@ -647,9 +621,8 @@ final class PlayMac_Article_Importer
             wp_die('你没有执行此操作的权限。', 403);
         }
         check_admin_referer('playmac_article_importer_qianfan_test');
-        @set_time_limit(60);
         try {
-            $result = self::run_worker(array('check'), 45);
+            $result = self::runtime_request('POST', '/v1/check', array(), 30);
             if (empty($result['success'])) {
                 self::redirect_settings('error', (string) ($result['error'] ?? '千帆连接测试失败。'));
             }
