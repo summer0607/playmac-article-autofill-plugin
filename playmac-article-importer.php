@@ -2,7 +2,7 @@
 /**
  * Plugin Name: PlayMac 文章自动补全
  * Description: 从 Steam 或 Macked 链接生成 PlayMac 游戏、软件文章草稿，并使用已验证的千帆图片外链。
- * Version: 2.0.0
+ * Version: 2.0.1
  * Author: PlayMac
  */
 
@@ -10,7 +10,7 @@ defined('ABSPATH') || exit;
 
 final class PlayMac_Article_Importer
 {
-    private const VERSION = '2.0.0';
+    private const VERSION = '2.0.1';
     private const AJAX_ACTION = 'playmac_article_import';
     private const GITHUB_OWNER = 'summer0607';
     private const GITHUB_REPOSITORY = 'playmac-article-autofill-plugin';
@@ -30,6 +30,7 @@ final class PlayMac_Article_Importer
         add_action('admin_notices', array(__CLASS__, 'render_import_notice'));
         add_action('admin_post_playmac_article_importer_initialize', array(__CLASS__, 'initialize_runtime'));
         add_action('admin_post_playmac_article_importer_qianfan_login', array(__CLASS__, 'qianfan_login'));
+        add_action('admin_post_playmac_article_importer_qianfan_test', array(__CLASS__, 'qianfan_test'));
         add_filter('pre_set_site_transient_update_plugins', array(__CLASS__, 'inject_github_update'));
         add_filter('plugins_api', array(__CLASS__, 'github_plugin_info'), 20, 3);
         add_filter('plugin_action_links_' . plugin_basename(__FILE__), array(__CLASS__, 'add_update_link'));
@@ -268,8 +269,9 @@ final class PlayMac_Article_Importer
 
     private static function run_worker(array $arguments, int $timeout, string $input = ''): array
     {
-        if (!function_exists('proc_open')) {
-            throw new RuntimeException('服务器禁用了插件运行所需的进程功能。');
+        $process_error = self::worker_process_error();
+        if ($process_error !== '') {
+            throw new RuntimeException($process_error);
         }
         $python = self::runtime_python();
         $worker = self::runtime_dir() . '/playmac_article_worker.py';
@@ -319,6 +321,21 @@ final class PlayMac_Article_Importer
             throw new RuntimeException($detail ?: ($exit_code === 0 ? '文章处理器返回异常。' : '文章处理器运行失败。'));
         }
         return $decoded;
+    }
+
+    private static function worker_process_error(): string
+    {
+        $required = array('proc_open', 'proc_get_status', 'proc_close', 'proc_terminate');
+        $disabled = array();
+        foreach ($required as $function) {
+            if (!function_exists($function)) {
+                $disabled[] = $function;
+            }
+        }
+        if (!$disabled) {
+            return '';
+        }
+        return '服务器未开启插件所需的进程权限，暂时不能登录千帆或生成文章。请在宝塔 PHP 设置的“禁用函数”中移除：' . implode('、', $disabled) . '。';
     }
 
     private static function validate_payload(array $payload): void
@@ -528,6 +545,14 @@ final class PlayMac_Article_Importer
                 </table>
                 <?php submit_button('登录并保存插件会话', 'primary', 'submit', false); ?>
             </form>
+            <hr />
+            <h2>第三步：测试千帆连接</h2>
+            <p>登录后可随时测试当前会话是否仍然有效，不会修改文章或图片。</p>
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+                <input type="hidden" name="action" value="playmac_article_importer_qianfan_test" />
+                <?php wp_nonce_field('playmac_article_importer_qianfan_test'); ?>
+                <?php submit_button('测试千帆连接', 'secondary', 'submit', false); ?>
+            </form>
         </div>
         <?php
     }
@@ -539,8 +564,9 @@ final class PlayMac_Article_Importer
         }
         check_admin_referer('playmac_article_importer_initialize');
         @set_time_limit(300);
-        if (!function_exists('proc_open')) {
-            self::redirect_settings('error', '服务器禁用了插件运行所需的进程功能。');
+        $process_error = self::worker_process_error();
+        if ($process_error !== '') {
+            self::redirect_settings('error', $process_error);
         }
         $script = self::runtime_dir() . '/install-runtime.sh';
         if (!is_file($script)) {
@@ -584,8 +610,28 @@ final class PlayMac_Article_Importer
                 self::redirect_settings('error', (string) ($result['error'] ?? '千帆登录失败。'));
             }
             self::redirect_settings('success', '千帆登录成功，插件已可上传图片。');
+        } catch (Throwable $throwable) {
+            self::redirect_settings('error', $throwable->getMessage() ?: '千帆登录暂时无法完成，请稍后重试。');
         } finally {
             unset($password);
+        }
+    }
+
+    public static function qianfan_test(): void
+    {
+        if (!current_user_can('manage_options')) {
+            wp_die('你没有执行此操作的权限。', 403);
+        }
+        check_admin_referer('playmac_article_importer_qianfan_test');
+        @set_time_limit(60);
+        try {
+            $result = self::run_worker(array('check'), 45);
+            if (empty($result['success'])) {
+                self::redirect_settings('error', (string) ($result['error'] ?? '千帆连接测试失败。'));
+            }
+            self::redirect_settings('success', '千帆连接正常，当前登录仍然有效。');
+        } catch (Throwable $throwable) {
+            self::redirect_settings('error', $throwable->getMessage() ?: '千帆连接测试暂时无法完成。');
         }
     }
 
