@@ -146,6 +146,33 @@ def playwright_cookies(cookie):
     return result
 
 
+def first_visible(locator):
+    for index in range(locator.count()):
+        candidate = locator.nth(index)
+        if candidate.is_visible():
+            return candidate
+    return None
+
+
+def submit_qianfan_login_form(page, email, password):
+    email_locator = page.locator('input[placeholder*="邮箱"], input[type="email"], input[name*="email" i]')
+    email_input = first_visible(email_locator)
+    if email_input is None:
+        account_login = first_visible(page.get_by_text("账号登录", exact=True))
+        if account_login is None:
+            raise WorkerError("千帆账号登录入口未找到，请稍后重试")
+        account_login.click()
+        page.wait_for_timeout(300)
+        email_input = first_visible(email_locator)
+    password_input = first_visible(page.locator('input[placeholder*="密码"], input[type="password"]'))
+    login_button = first_visible(page.get_by_role("button", name=re.compile("登录|登陆|登入")))
+    if email_input is None or password_input is None or login_button is None:
+        raise WorkerError("千帆账号登录表单未加载完成，请稍后重试")
+    email_input.fill(email)
+    password_input.fill(password)
+    login_button.click()
+
+
 def qianfan_folder(cookie, folder):
     payload = {"filter": {"keyword": "", "statuses": [1], "basicTypes": [1], "fatherDirectoryId": -1}, "pageIndex": 1, "pageSize": 50, "option": {"withDetail": True}}
     response = requests.post(f"{QIANFAN_API}/search_directory_manageable", headers=qianfan_headers(cookie, True), json=payload, timeout=30)
@@ -415,25 +442,17 @@ def login(session_path, email, password):
         page = context.new_page()
         page.goto(QIANFAN_URL, wait_until="domcontentloaded", timeout=60000)
         if "pictureSpace" not in page.url:
-            inputs = page.locator('input[type="text"], input[type="email"], input[autocomplete="username"]')
-            if inputs.count():
-                inputs.first.fill(email)
-            password_input = page.locator('input[type="password"], input[autocomplete="current-password"]')
-            if password_input.count():
-                password_input.first.fill(password)
-            button = page.get_by_role("button", name=re.compile("登录|登陆|登入"))
-            if button.count():
-                button.first.click()
-            page.wait_for_timeout(5000)
-        cookies = context.cookies()
+            submit_qianfan_login_form(page, email, password)
+            page.wait_for_timeout(8000)
+        cookies = context.cookies(["https://ark.xiaohongshu.com", "https://xiaohongshu.com"])
         browser.close()
     cookie = "; ".join(f"{item['name']}={item['value']}" for item in cookies)
     if not cookie:
         raise WorkerError("千帆登录未完成，请检查账号、密码或安全验证")
+    verify_qianfan(cookie)
     Path(session_path).parent.mkdir(parents=True, exist_ok=True)
     Path(session_path).write_text(json.dumps({"cookie": cookie, "updated_at": int(time.time())}), encoding="utf-8")
     os.chmod(session_path, 0o600)
-    verify_qianfan(cookie)
     return {"message": "千帆登录成功"}
 
 

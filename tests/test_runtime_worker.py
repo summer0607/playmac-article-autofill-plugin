@@ -24,6 +24,54 @@ class Response:
 
 
 class RuntimeWorkerTests(unittest.TestCase):
+    def test_qianfan_login_switches_to_account_form(self):
+        class Locator:
+            def __init__(self, page, kind):
+                self.page = page
+                self.kind = kind
+
+            def count(self):
+                return 1
+
+            def nth(self, _index):
+                return self
+
+            def is_visible(self):
+                return self.kind in {"account", "button"} or self.page.account_mode
+
+            def click(self):
+                if self.kind == "account":
+                    self.page.account_mode = True
+                if self.kind == "button":
+                    self.page.submitted = True
+
+            def fill(self, value):
+                self.page.values[self.kind] = value
+
+        class Page:
+            def __init__(self):
+                self.account_mode = False
+                self.submitted = False
+                self.values = {}
+
+            def locator(self, selector):
+                return Locator(self, "email" if "邮箱" in selector else "password")
+
+            def get_by_text(self, _text, exact=False):
+                return Locator(self, "account")
+
+            def get_by_role(self, _role, name=None):
+                return Locator(self, "button")
+
+            def wait_for_timeout(self, _timeout):
+                return None
+
+        page = Page()
+        WORKER.submit_qianfan_login_form(page, "user@example.com", "secret")
+        self.assertTrue(page.account_mode)
+        self.assertTrue(page.submitted)
+        self.assertEqual(page.values, {"email": "user@example.com", "password": "secret"})
+
     def test_rejects_unrelated_source(self):
         with self.assertRaises(WORKER.WorkerError):
             WORKER.parse_source("https://example.com/article")
@@ -79,6 +127,10 @@ class RuntimeWorkerTests(unittest.TestCase):
         with self.assertRaises(WORKER.WorkerError):
             WORKER.load_session(path)
         path.unlink()
+
+    def test_failed_login_does_not_replace_session(self):
+        source = Path(WORKER_PATH).read_text(encoding="utf-8")
+        self.assertLess(source.index("verify_qianfan(cookie)", source.index("def login")), source.index("Path(session_path).write_text", source.index("def login")))
 
 
 if __name__ == "__main__":
