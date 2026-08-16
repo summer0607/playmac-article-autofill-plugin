@@ -2,7 +2,7 @@
 /**
  * Plugin Name: PlayMac 文章自动补全
  * Description: 从 Steam 或 Macked 链接生成 PlayMac 游戏、软件文章草稿，并使用已验证的千帆图片外链。
- * Version: 3.0.2
+ * Version: 3.1.0
  * Author: PlayMac
  */
 
@@ -10,9 +10,11 @@ defined('ABSPATH') || exit;
 
 final class PlayMac_Article_Importer
 {
-    private const VERSION = '3.0.2';
+    private const VERSION = '3.1.0';
     private const AJAX_ACTION = 'playmac_article_import';
     private const AJAX_STATUS_ACTION = 'playmac_article_import_status';
+    private const AJAX_QR_START_ACTION = 'playmac_qianfan_qr_start';
+    private const AJAX_QR_STATUS_ACTION = 'playmac_qianfan_qr_status';
     private const GITHUB_OWNER = 'summer0607';
     private const GITHUB_REPOSITORY = 'playmac-article-autofill-plugin';
     private const GITHUB_ASSET = 'playmac-article-importer.zip';
@@ -28,6 +30,8 @@ final class PlayMac_Article_Importer
         add_action('admin_enqueue_scripts', array(__CLASS__, 'enqueue_assets'));
         add_action('wp_ajax_' . self::AJAX_ACTION, array(__CLASS__, 'ajax_import'));
         add_action('wp_ajax_' . self::AJAX_STATUS_ACTION, array(__CLASS__, 'ajax_import_status'));
+        add_action('wp_ajax_' . self::AJAX_QR_START_ACTION, array(__CLASS__, 'ajax_qianfan_qr_start'));
+        add_action('wp_ajax_' . self::AJAX_QR_STATUS_ACTION, array(__CLASS__, 'ajax_qianfan_qr_status'));
         add_action('admin_menu', array(__CLASS__, 'register_settings_page'));
         add_action('admin_init', array(__CLASS__, 'register_settings'));
         add_action('admin_notices', array(__CLASS__, 'render_import_notice'));
@@ -201,12 +205,16 @@ final class PlayMac_Article_Importer
 
     public static function enqueue_assets(string $hook): void
     {
-        if (!in_array($hook, array('post.php', 'post-new.php'), true)) {
+        $is_editor = in_array($hook, array('post.php', 'post-new.php'), true);
+        $is_settings = $hook === 'settings_page_playmac-article-importer';
+        if (!$is_editor && !$is_settings) {
             return;
         }
-        $screen = get_current_screen();
-        if (!$screen || $screen->post_type !== 'post') {
-            return;
+        if ($is_editor) {
+            $screen = get_current_screen();
+            if (!$screen || $screen->post_type !== 'post') {
+                return;
+            }
         }
         $base = plugin_dir_url(__FILE__);
         wp_enqueue_style(
@@ -227,9 +235,46 @@ final class PlayMac_Article_Importer
             'action' => self::AJAX_ACTION,
             'statusAction' => self::AJAX_STATUS_ACTION,
             'nonce' => wp_create_nonce(self::AJAX_ACTION),
-            'postId' => get_the_ID(),
-            'jobId' => sanitize_key((string) get_post_meta(get_the_ID(), self::META_JOB_ID, true)),
+            'postId' => $is_editor ? get_the_ID() : 0,
+            'jobId' => $is_editor ? sanitize_key((string) get_post_meta(get_the_ID(), self::META_JOB_ID, true)) : '',
+            'qrStartAction' => self::AJAX_QR_START_ACTION,
+            'qrStatusAction' => self::AJAX_QR_STATUS_ACTION,
+            'qrNonce' => wp_create_nonce(self::AJAX_QR_START_ACTION),
         ));
+    }
+
+    public static function ajax_qianfan_qr_start(): void
+    {
+        check_ajax_referer(self::AJAX_QR_START_ACTION, 'nonce');
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error(array('message' => '你没有执行此操作的权限。'), 403);
+        }
+        try {
+            $result = self::runtime_request('POST', '/v1/login/qr/start', array(), 20);
+            if (empty($result['success'])) {
+                throw new RuntimeException((string) ($result['error'] ?? '千帆登录二维码生成失败。'));
+            }
+            wp_send_json_success((array) ($result['payload'] ?? array()));
+        } catch (Throwable $throwable) {
+            wp_send_json_error(array('message' => $throwable->getMessage() ?: '千帆登录二维码生成失败。'), 422);
+        }
+    }
+
+    public static function ajax_qianfan_qr_status(): void
+    {
+        check_ajax_referer(self::AJAX_QR_START_ACTION, 'nonce');
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error(array('message' => '你没有执行此操作的权限。'), 403);
+        }
+        try {
+            $result = self::runtime_request('POST', '/v1/login/qr/status', array(), 15);
+            if (empty($result['success'])) {
+                throw new RuntimeException((string) ($result['error'] ?? '千帆扫码状态读取失败。'));
+            }
+            wp_send_json_success((array) ($result['payload'] ?? array()));
+        } catch (Throwable $throwable) {
+            wp_send_json_error(array('message' => $throwable->getMessage() ?: '千帆扫码状态读取失败。'), 422);
+        }
     }
 
     public static function ajax_import(): void
@@ -543,23 +588,31 @@ final class PlayMac_Article_Importer
                 <?php submit_button('测试服务器组件', 'secondary', 'submit', false); ?>
             </form>
             <hr />
-            <h2>第二步：登录千帆图片空间</h2>
-            <p>登录仅由插件用于上传图片，账号密码不会保存；登录会话保存在网站私有目录中。</p>
-            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
-                <input type="hidden" name="action" value="playmac_article_importer_qianfan_login" />
-                <?php wp_nonce_field('playmac_article_importer_qianfan_login'); ?>
-                <table class="form-table" role="presentation">
-                    <tr>
-                        <th scope="row"><label for="playmac-qianfan-email">千帆账号</label></th>
-                        <td><input class="regular-text" required type="text" id="playmac-qianfan-email" name="email" autocomplete="username" /></td>
-                    </tr>
-                    <tr>
-                        <th scope="row"><label for="playmac-qianfan-password">千帆密码</label></th>
-                        <td><input class="regular-text" required type="password" id="playmac-qianfan-password" name="password" autocomplete="current-password" /></td>
-                    </tr>
-                </table>
-                <?php submit_button('登录并保存插件会话', 'primary', 'submit', false); ?>
-            </form>
+            <h2>第二步：扫码登录千帆图片空间</h2>
+            <p>点击后会显示千帆官方登录二维码。请使用小红书 APP 扫码并确认，插件不会读取或保存账号密码。</p>
+            <button type="button" class="button button-primary" id="playmac-qianfan-qr-start">获取千帆登录二维码</button>
+            <div class="playmac-qianfan-qr" id="playmac-qianfan-qr" hidden>
+                <img id="playmac-qianfan-qr-image" alt="千帆登录二维码" />
+                <p id="playmac-qianfan-qr-status" role="status" aria-live="polite"></p>
+            </div>
+            <details class="playmac-qianfan-password-login">
+                <summary>账号密码登录（备用）</summary>
+                <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+                    <input type="hidden" name="action" value="playmac_article_importer_qianfan_login" />
+                    <?php wp_nonce_field('playmac_article_importer_qianfan_login'); ?>
+                    <table class="form-table" role="presentation">
+                        <tr>
+                            <th scope="row"><label for="playmac-qianfan-email">千帆账号</label></th>
+                            <td><input class="regular-text" required type="text" id="playmac-qianfan-email" name="email" autocomplete="username" /></td>
+                        </tr>
+                        <tr>
+                            <th scope="row"><label for="playmac-qianfan-password">千帆密码</label></th>
+                            <td><input class="regular-text" required type="password" id="playmac-qianfan-password" name="password" autocomplete="current-password" /></td>
+                        </tr>
+                    </table>
+                    <?php submit_button('使用账号密码登录', 'secondary', 'submit', false); ?>
+                </form>
+            </details>
             <hr />
             <h2>第三步：测试千帆连接</h2>
             <p>登录后可随时测试当前会话是否仍然有效，不会修改文章或图片。</p>

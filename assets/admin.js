@@ -18,7 +18,84 @@
             .text(message || '');
     }
 
+    function initQrLogin() {
+        var $start = $('#playmac-qianfan-qr-start');
+        if (!$start.length) return;
+        var $panel = $('#playmac-qianfan-qr');
+        var $image = $('#playmac-qianfan-qr-image');
+        var $status = $('#playmac-qianfan-qr-status');
+        var timer = null;
+
+        function stopPolling() {
+            if (timer) window.clearTimeout(timer);
+            timer = null;
+        }
+
+        function showError(message) {
+            stopPolling();
+            $status.removeClass('is-loading is-success').addClass('is-error').text(message || '千帆扫码登录失败。');
+            $start.prop('disabled', false).text('重新获取千帆登录二维码');
+        }
+
+        function applyState(data) {
+            data = data || {};
+            if (data.qr_image) {
+                $image.attr('src', data.qr_image).show();
+            }
+            if (data.status === 'success') {
+                stopPolling();
+                $status.removeClass('is-loading is-error').addClass('is-success').text(data.message || '千帆扫码登录成功。');
+                $start.prop('disabled', false).text('重新登录千帆');
+                return;
+            }
+            if (data.status === 'failed') {
+                showError(data.error || data.message);
+                return;
+            }
+            $status.removeClass('is-error is-success').addClass('is-loading').text(data.message || '正在生成千帆登录二维码…');
+            timer = window.setTimeout(pollStatus, data.status === 'waiting' ? 1500 : 800);
+        }
+
+        function pollStatus() {
+            $.post(PlayMacArticleImporter.ajaxUrl, {
+                action: PlayMacArticleImporter.qrStatusAction,
+                nonce: PlayMacArticleImporter.qrNonce
+            }).done(function (response) {
+                if (!response || !response.success) {
+                    showError((response && response.data && response.data.message) || '千帆扫码状态读取失败。');
+                    return;
+                }
+                applyState(response.data);
+            }).fail(function (xhr) {
+                var response = xhr.responseJSON || {};
+                showError((response.data && response.data.message) || '千帆扫码状态读取失败。');
+            });
+        }
+
+        $start.on('click', function () {
+            stopPolling();
+            $start.prop('disabled', true);
+            $panel.prop('hidden', false);
+            $image.removeAttr('src').hide();
+            $status.removeClass('is-error is-success').addClass('is-loading').text('正在生成千帆登录二维码…');
+            $.post(PlayMacArticleImporter.ajaxUrl, {
+                action: PlayMacArticleImporter.qrStartAction,
+                nonce: PlayMacArticleImporter.qrNonce
+            }).done(function (response) {
+                if (!response || !response.success) {
+                    showError((response && response.data && response.data.message) || '千帆登录二维码生成失败。');
+                    return;
+                }
+                applyState(response.data);
+            }).fail(function (xhr) {
+                var response = xhr.responseJSON || {};
+                showError((response.data && response.data.message) || '千帆登录二维码生成失败。');
+            });
+        });
+    }
+
     $(function () {
+        initQrLogin();
         var $button = $('#playmac-import-start');
         var $url = $('#playmac-import-source-url');
         var activeJobId = String(PlayMacArticleImporter.jobId || '');

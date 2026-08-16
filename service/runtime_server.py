@@ -20,16 +20,19 @@ import requests
 ROOT_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT_DIR / "runtime"))
 
-from playmac_article_worker import WorkerError, import_macked, import_steam, load_session, login, parse_source, verify_qianfan
+from playmac_article_worker import WorkerError, import_macked, import_steam, load_session, login, login_with_qr, parse_source, verify_qianfan
 
 
 DATA_DIR = Path(os.environ.get("PLAYMAC_RUNTIME_DATA", "/data")).resolve()
 SESSION_FILE = DATA_DIR / "qianfan-session.json"
 JOBS_DIR = DATA_DIR / "jobs"
+QR_STATE_FILE = DATA_DIR / "qianfan-qr-login.json"
 TOKEN = os.environ.get("PLAYMAC_RUNTIME_TOKEN", "").strip()
 PORT = int(os.environ.get("PLAYMAC_RUNTIME_PORT", "8080"))
 VERSION = os.environ.get("PLAYMAC_RUNTIME_VERSION", "dev")
 OPERATION_LOCK = threading.Lock()
+QR_LOGIN_LOCK = threading.Lock()
+QR_LOGIN_THREAD = None
 
 
 def write_json(path, value):
@@ -86,6 +89,32 @@ def start_import(source, skip_images=False):
     thread = threading.Thread(target=process_job, args=(job_id, source, skip_images), daemon=True)
     thread.start()
     return job_id
+
+
+def update_qr_state(value):
+    payload = {"success": True, "updated_at": int(time.time()), **value}
+    write_json(QR_STATE_FILE, payload)
+
+
+def process_qr_login():
+    try:
+        login_with_qr(str(SESSION_FILE), update_qr_state)
+    except (WorkerError, requests.RequestException) as exc:
+        update_qr_state({"status": "failed", "error": str(exc)})
+    except Exception:
+        traceback.print_exc()
+        update_qr_state({"status": "failed", "error": "千帆扫码登录组件发生异常，请重新获取二维码"})
+
+
+def start_qr_login():
+    global QR_LOGIN_THREAD
+    with QR_LOGIN_LOCK:
+        if QR_LOGIN_THREAD is not None and QR_LOGIN_THREAD.is_alive():
+            return read_json(QR_STATE_FILE) or {"success": True, "status": "starting", "message": "正在生成千帆登录二维码"}
+        update_qr_state({"status": "starting", "message": "正在生成千帆登录二维码"})
+        QR_LOGIN_THREAD = threading.Thread(target=process_qr_login, daemon=True)
+        QR_LOGIN_THREAD.start()
+        return read_json(QR_STATE_FILE)
 
 
 def authorized(value):
@@ -156,6 +185,16 @@ class RuntimeHandler(BaseHTTPRequestHandler):
                 with OPERATION_LOCK:
                     result = login(str(SESSION_FILE), str(payload.get("email") or ""), str(payload.get("password") or ""))
                 self.send_payload(200, {"success": True, "payload": result})
+                return
+            if path == "/v1/login/qr/start":
+                self.send_payload(202, {"success": True, "payload": start_qr_login()})
+                return
+            if path == "/v1/login/qr/status":
+                state = read_json(QR_STATE_FILE)
+                if state is None:
+                    self.send_payload(404, {"success": False, "error": "千帆扫码登录尚未开始"})
+                    return
+                self.send_payload(200, {"success": True, "payload": state})
                 return
             if path == "/v1/check":
                 verify_qianfan(load_session(str(SESSION_FILE)))

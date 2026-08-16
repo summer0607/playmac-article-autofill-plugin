@@ -151,11 +151,12 @@ class RuntimeWorkerTests(unittest.TestCase):
 
     def test_failed_login_does_not_replace_session(self):
         source = Path(WORKER_PATH).read_text(encoding="utf-8")
-        self.assertLess(source.index("verify_qianfan(cookie)", source.index("def login")), source.index("Path(session_path).write_text", source.index("def login")))
+        start = source.index("def login(session_path")
+        self.assertLess(source.index("verify_qianfan(cookie)", start), source.index("save_qianfan_session(session_path, cookie)", start))
 
     def test_login_does_not_trust_initial_picture_space_url(self):
         source = Path(WORKER_PATH).read_text(encoding="utf-8")
-        login_source = source[source.index("def login"):source.index("def main")]
+        login_source = source[source.index("def login(session_path"):source.index("def main")]
         self.assertNotIn('"pictureSpace" not in page.url', login_source)
         self.assertIn("qianfan_picture_space_ready(page)", login_source)
 

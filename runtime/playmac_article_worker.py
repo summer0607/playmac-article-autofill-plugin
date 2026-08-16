@@ -204,6 +204,94 @@ def qianfan_picture_space_ready(page):
     return first_visible(page.get_by_text("上传本地图片", exact=True)) is not None
 
 
+def context_cookie_header(context):
+    cookies = context.cookies([
+        "https://ark.xiaohongshu.com",
+        "https://customer.xiaohongshu.com",
+        "https://xiaohongshu.com",
+    ])
+    return "; ".join(f"{item['name']}={item['value']}" for item in cookies)
+
+
+def save_qianfan_session(session_path, cookie):
+    path = Path(session_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(json.dumps({"cookie": cookie, "updated_at": int(time.time())}), encoding="utf-8")
+    os.chmod(temporary, 0o600)
+    temporary.replace(path)
+
+
+def visible_qr_image(page):
+    images = page.locator('img[src^="data:image/png;base64,"]')
+    for index in range(images.count()):
+        image = images.nth(index)
+        if not image.is_visible():
+            continue
+        dimensions = image.evaluate("element => [element.naturalWidth, element.naturalHeight]")
+        if dimensions and min(dimensions) >= 150:
+            return str(image.get_attribute("src") or "")
+    return ""
+
+
+def login_with_qr(session_path, update_state, timeout=180):
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError as exc:
+        raise WorkerError("插件图片组件未初始化，请先初始化") from exc
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        context = browser.new_context(viewport={"width": 1440, "height": 900}, user_agent=USER_AGENT)
+        page = context.new_page()
+        try:
+            page.goto(QIANFAN_URL, wait_until="domcontentloaded", timeout=60000)
+            for _ in range(60):
+                if qianfan_login_form_ready(page):
+                    break
+                page.wait_for_timeout(250)
+            else:
+                raise WorkerError("千帆扫码登录入口暂时无法打开")
+            switch = first_visible(page.locator(".beer-login-container img"))
+            if switch is None:
+                raise WorkerError("千帆扫码登录入口未找到")
+            switch.click()
+            qr_image = ""
+            for _ in range(40):
+                page.wait_for_timeout(250)
+                qr_image = visible_qr_image(page)
+                if qr_image:
+                    break
+            if not qr_image:
+                raise WorkerError("千帆登录二维码未生成，请重新获取")
+            update_state({"status": "waiting", "message": "请使用小红书 APP 扫码并确认登录", "qr_image": qr_image})
+            deadline = time.time() + timeout
+            last_cookie = ""
+            last_qr_image = qr_image
+            while time.time() < deadline:
+                page.wait_for_timeout(500)
+                cookie = context_cookie_header(context)
+                if cookie and cookie != last_cookie:
+                    last_cookie = cookie
+                    try:
+                        verify_qianfan(cookie)
+                    except WorkerError:
+                        pass
+                    else:
+                        save_qianfan_session(session_path, cookie)
+                        update_state({"status": "success", "message": "千帆扫码登录成功"})
+                        return {"message": "千帆扫码登录成功"}
+                page_text = page.locator("body").inner_text()
+                if "二维码已失效" in page_text or "二维码失效" in page_text:
+                    raise WorkerError("千帆登录二维码已失效，请重新获取")
+                current_qr_image = visible_qr_image(page)
+                if current_qr_image and current_qr_image != last_qr_image:
+                    last_qr_image = current_qr_image
+                    update_state({"status": "waiting", "message": "二维码已刷新，请使用小红书 APP 扫码", "qr_image": current_qr_image})
+            raise WorkerError("千帆扫码登录已超时，请重新获取二维码")
+        finally:
+            browser.close()
+
+
 def qianfan_folder(cookie, folder):
     payload = {"filter": {"keyword": "", "statuses": [1], "basicTypes": [1], "fatherDirectoryId": -1}, "pageIndex": 1, "pageSize": 50, "option": {"withDetail": True}}
     response = requests.post(f"{QIANFAN_API}/search_directory_manageable", headers=qianfan_headers(cookie, True), json=payload, timeout=30)
@@ -494,15 +582,12 @@ def login(session_path, email, password):
                     break
         if not picture_space_ready:
             raise WorkerError("千帆登录未完成，请检查账号、密码或安全验证")
-        cookies = context.cookies(["https://ark.xiaohongshu.com", "https://xiaohongshu.com"])
+        cookie = context_cookie_header(context)
         browser.close()
-    cookie = "; ".join(f"{item['name']}={item['value']}" for item in cookies)
     if not cookie:
         raise WorkerError("千帆登录未完成，请检查账号、密码或安全验证")
     verify_qianfan(cookie)
-    Path(session_path).parent.mkdir(parents=True, exist_ok=True)
-    Path(session_path).write_text(json.dumps({"cookie": cookie, "updated_at": int(time.time())}), encoding="utf-8")
-    os.chmod(session_path, 0o600)
+    save_qianfan_session(session_path, cookie)
     return {"message": "千帆登录成功"}
 
 

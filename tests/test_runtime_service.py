@@ -13,15 +13,19 @@ class RuntimeServiceTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.jobs = Path(self.temporary.name) / "jobs"
         self.session = Path(self.temporary.name) / "qianfan-session.json"
+        self.qr_state = Path(self.temporary.name) / "qianfan-qr-login.json"
         self.jobs.mkdir()
         self.jobs_patch = mock.patch.object(runtime_server, "JOBS_DIR", self.jobs)
         self.session_patch = mock.patch.object(runtime_server, "SESSION_FILE", self.session)
+        self.qr_state_patch = mock.patch.object(runtime_server, "QR_STATE_FILE", self.qr_state)
         self.jobs_patch.start()
         self.session_patch.start()
+        self.qr_state_patch.start()
 
     def tearDown(self):
         self.jobs_patch.stop()
         self.session_patch.stop()
+        self.qr_state_patch.stop()
         self.temporary.cleanup()
 
     def test_authorization_is_optional_for_local_service(self):
@@ -43,6 +47,12 @@ class RuntimeServiceTests(unittest.TestCase):
                 time.sleep(0.01)
         self.assertEqual(result["status"], "complete")
         self.assertEqual(result["payload"], payload)
+
+    def test_qr_login_state_is_private_and_persistent(self):
+        runtime_server.update_qr_state({"status": "waiting", "qr_image": "data:image/png;base64,example"})
+        result = json.loads(self.qr_state.read_text(encoding="utf-8"))
+        self.assertEqual(result["status"], "waiting")
+        self.assertEqual(self.qr_state.stat().st_mode & 0o777, 0o600)
 
 
 if __name__ == "__main__":
