@@ -52,6 +52,7 @@ SOFTWARE_CATEGORIES = (
     (("download", "下载"), "下载工具"),
 )
 GAME_ARTICLE_COMMON_HTML = Path(__file__).with_name("game_article_common.html").read_text(encoding="utf-8").strip()
+STEAM_SCREENSHOT_COUNT = 5
 
 
 class WorkerError(RuntimeError):
@@ -503,6 +504,51 @@ def pick_chinese_name(app_id, fallback):
         return fallback
 
 
+def steam_store_page(app_id):
+    headers = {
+        "User-Agent": USER_AGENT,
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+        "Cookie": "birthtime=0; lastagecheckage=1-January-1980",
+    }
+    response = requests.get(f"https://store.steampowered.com/app/{app_id}/?cc=cn&l=schinese", headers=headers, timeout=30)
+    response.raise_for_status()
+    return response.text
+
+
+def steam_subtitle_languages(source):
+    table = re.search(r'<table\b[^>]*class=["\'][^"\']*game_language_options[^"\']*["\'][^>]*>(.*?)</table>', str(source or ""), re.I | re.S)
+    if not table:
+        return "待填写"
+    languages = []
+    for row in re.findall(r"<tr\b[^>]*>(.*?)</tr>", table.group(1), re.I | re.S):
+        cells = re.findall(r"<td\b[^>]*>(.*?)</td>", row, re.I | re.S)
+        if len(cells) < 4 or not re.search(r"(?:&#10004;|✓|✔)", html.unescape(cells[3])):
+            continue
+        language = clean_text(cells[0])
+        if language:
+            languages.append(language)
+    return "、".join(unique(languages, 40)) or "待填写"
+
+
+def steam_store_screenshot_urls(source):
+    normalized = html.unescape(str(source or "").replace("\\/", "/"))
+    urls = re.findall(r'https://[^\s"\'<>]+/ss_[^\s"\'<>]+\.1920x1080\.jpg(?:\?[^\s"\'<>]*)?', normalized, re.I)
+    return unique_image_sources(urls, STEAM_SCREENSHOT_COUNT)
+
+
+def steam_screenshot_urls(info, store_source=""):
+    api_urls = [str(item.get("path_full") or "") for item in info.get("screenshots") or []]
+    return unique_image_sources([*api_urls, *steam_store_screenshot_urls(store_source)], STEAM_SCREENSHOT_COUNT)
+
+
+def steam_about_game(info):
+    source = info.get("about_the_game") or info.get("detailed_description") or ""
+    text = clean_text(source)
+    if not text:
+        return "<p>Steam 暂未提供更多游戏介绍。</p>"
+    return f"<p>{html.escape(text[:3000])}</p>"
+
+
 def game_category(genres, description):
     source = " ".join([*genres, description]).lower()
     for name, aliases in GAME_CATEGORIES:
@@ -513,8 +559,7 @@ def game_category(genres, description):
 
 def game_body(info, chinese_name, english_name, cover, screenshots):
     description = html.escape(clean_text(info.get("short_description")) or f"{chinese_name} 是一款 Mac 游戏。")
-    detailed = str(info.get("detailed_description") or "")[:3000]
-    detailed = re.sub(r'<h1\b[^>]*>\s*关于游戏\s*</h1>', "", detailed, count=1, flags=re.I)
+    detailed = steam_about_game(info)
     release_date = html.escape(clean_text((info.get("release_date") or {}).get("date")) or "待填写")
     pieces = []
     if cover:
@@ -529,7 +574,7 @@ def game_body(info, chinese_name, english_name, cover, screenshots):
         detailed or "<p>Steam 暂未提供更多游戏介绍。</p>",
         '<h2><a id="%E6%B8%B8%E6%88%8F%E6%88%AA%E5%9B%BE" class="anchor" aria-hidden="true"></a>游戏截图</h2>',
     ])
-    screenshots = unique_image_sources(screenshots)
+    screenshots = unique_image_sources(screenshots, STEAM_SCREENSHOT_COUNT)
     if screenshots:
         pieces.extend(f'<p><img decoding="async" src="{url}" alt="" /></p>' for url in screenshots)
     else:
@@ -544,9 +589,17 @@ def import_steam(app_id, session_path, skip_images=False):
         raise WorkerError("Steam 没有返回可用的游戏资料")
     english_name = clean_text(info.get("name"))
     chinese_name = pick_chinese_name(app_id, english_name)
-    image_urls = unique_image_sources([str(info.get("header_image") or ""), *(str(item.get("path_full") or "") for item in (info.get("screenshots") or [])[:6])], 7)
-    if not image_urls:
+    try:
+        store_source = steam_store_page(app_id)
+    except requests.RequestException:
+        store_source = ""
+    cover_url = str(info.get("header_image") or "").strip()
+    screenshot_urls = steam_screenshot_urls(info, store_source)
+    if not cover_url:
         raise WorkerError("Steam 没有提供可用图片")
+    if not screenshot_urls:
+        raise WorkerError("Steam 没有提供可用游戏截图")
+    image_urls = [cover_url, *screenshot_urls]
     if skip_images:
         cover, screenshots = image_urls[0], image_urls[1:]
     else:
@@ -559,7 +612,7 @@ def import_steam(app_id, session_path, skip_images=False):
         cover, screenshots = uploaded[0], uploaded[1:]
     genres = [clean_text(item.get("description")) for item in info.get("genres") or []]
     category = game_category(genres, str(info.get("short_description") or ""))
-    languages = clean_text(info.get("supported_languages")) or "待填写"
+    languages = steam_subtitle_languages(store_source)
     mac_raw = clean_text((info.get("mac_requirements") or {}).get("minimum"))
     chip = "✅M系列｜✅Intel" if "Apple Silicon" not in mac_raw else "✅M系列｜❌intel"
     version = "待填写"

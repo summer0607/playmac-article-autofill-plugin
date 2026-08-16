@@ -25,6 +25,15 @@ class Response:
 
 
 class RuntimeWorkerTests(unittest.TestCase):
+    STEAM_LANGUAGE_TABLE = """
+    <table class="game_language_options">
+      <tr><th></th><th>界面</th><th>完全音频</th><th>字幕</th></tr>
+      <tr><td>简体中文</td><td><span>&#10004;</span></td><td></td><td><span>&#10004;</span></td></tr>
+      <tr><td>英语</td><td><span>&#10004;</span></td><td><span>&#10004;</span></td><td><span>&#10004;</span></td></tr>
+      <tr><td>日语</td><td><span>&#10004;</span></td><td><span>&#10004;</span></td><td></td></tr>
+    </table>
+    """
+
     def test_image_sources_ignore_query_duplicates(self):
         sources = WORKER.unique_image_sources([
             "https://cdn.example/image.jpg?t=1",
@@ -155,12 +164,14 @@ class RuntimeWorkerTests(unittest.TestCase):
 
     def test_steam_body_keeps_game_format(self):
         def fake_request(url, **_kwargs):
+            if "/app/620/" in url:
+                return Response(text=self.STEAM_LANGUAGE_TABLE)
             return Response({
                 "620": {"data": {
                     "name": "Portal 2",
                     "short_description": "一款动作冒险游戏。",
                     "header_image": "https://cdn.example/cover.jpg",
-                    "screenshots": [{"path_full": "https://cdn.example/shot.jpg"}],
+                    "screenshots": [{"path_full": f"https://cdn.example/shot-{index}.jpg"} for index in range(7)],
                     "genres": [{"description": "Action"}],
                     "supported_languages": "English, 简体中文",
                     "release_date": {"date": "2026 年 2 月 27 日"},
@@ -169,11 +180,14 @@ class RuntimeWorkerTests(unittest.TestCase):
             })
 
         original = WORKER.request
+        original_store_page = WORKER.steam_store_page
         WORKER.request = fake_request
+        WORKER.steam_store_page = lambda _app_id: self.STEAM_LANGUAGE_TABLE
         try:
             article = WORKER.import_steam("620", "/tmp/unused", skip_images=True)
         finally:
             WORKER.request = original
+            WORKER.steam_store_page = original_store_page
         expected_sections = ["一款动作冒险游戏。", "发行日期：2026 年 2 月 27 日", "经验建议", "注意事项", "安装方法", "常见问题", "关于游戏", "游戏截图"]
         positions = [article["content"].index(section) for section in expected_sections]
         self.assertEqual(positions, sorted(positions))
@@ -182,6 +196,72 @@ class RuntimeWorkerTests(unittest.TestCase):
         self.assertIn("2025年9月25日后发布的游戏内置了“CE修改器”", article["content"])
         self.assertNotIn("配置要求", article["content"])
         self.assertNotIn("软件介绍", article["content"])
+        self.assertEqual(len(article["image_urls"]), 6)
+        self.assertEqual(article["content"].count("https://cdn.example/shot-"), 5)
+        languages = next(item["desc"] for item in article["resource_info"] if item["title"] == "资源语言")
+        self.assertEqual(languages, "简体中文、英语")
+
+    def test_steam_downloads_uploads_and_inserts_five_screenshots(self):
+        screenshots = [{"path_full": f"https://cdn.example/shot-{index}.jpg"} for index in range(8)]
+
+        def fake_request(url, **_kwargs):
+            if "/app/730/" in url:
+                return Response(text=self.STEAM_LANGUAGE_TABLE)
+            return Response({"730": {"data": {
+                "name": "Test Game",
+                "short_description": "简介",
+                "header_image": "https://cdn.example/cover.jpg",
+                "screenshots": screenshots,
+                "genres": [],
+                "release_date": {"date": "2026 年 8 月 16 日"},
+                "mac_requirements": {"minimum": "macOS 12"},
+            }}})
+
+        with tempfile.TemporaryDirectory() as directory:
+            staged = []
+
+            def fake_download(url, filename, _referer):
+                path = Path(directory) / f"{filename}.jpg"
+                path.write_bytes(url.encode("utf-8"))
+                staged.append(path)
+                return path
+
+            def fake_upload(_session_path, paths):
+                self.assertEqual(len(paths), 6)
+                return [f"https://qimg.xiaohongshu.com/arkgoods/uploaded-{index}" for index in range(6)]
+
+            original_request = WORKER.request
+            original_store_page = WORKER.steam_store_page
+            original_download = WORKER.download_image
+            original_upload = WORKER.upload_images
+            WORKER.request = fake_request
+            WORKER.steam_store_page = lambda _app_id: self.STEAM_LANGUAGE_TABLE
+            WORKER.download_image = fake_download
+            WORKER.upload_images = fake_upload
+            try:
+                article = WORKER.import_steam("730", "/tmp/session")
+            finally:
+                WORKER.request = original_request
+                WORKER.steam_store_page = original_store_page
+                WORKER.download_image = original_download
+                WORKER.upload_images = original_upload
+
+        self.assertEqual(len(staged), 6)
+        self.assertEqual(len(article["image_urls"]), 6)
+        self.assertEqual(article["content"].count("https://qimg.xiaohongshu.com/arkgoods/uploaded-"), 6)
+        screenshot_section = article["content"].split("游戏截图</h2>", 1)[1]
+        self.assertEqual(screenshot_section.count("<img "), 5)
+
+    def test_steam_about_game_cannot_break_screenshot_section(self):
+        content = WORKER.game_body(
+            {"short_description": "简介", "detailed_description": "<div>" + ("介绍" * 2000)},
+            "测试游戏",
+            "Test Game",
+            "https://qimg.xiaohongshu.com/cover",
+            [f"https://qimg.xiaohongshu.com/shot-{index}" for index in range(5)],
+        )
+        self.assertEqual(content.split("游戏截图</h2>", 1)[1].count("<img "), 5)
+        self.assertNotIn("<div>", content)
 
     def test_steam_body_keeps_required_sections_without_optional_data(self):
         content = WORKER.game_body({"short_description": "简介"}, "测试游戏", "Test Game", "", [])
