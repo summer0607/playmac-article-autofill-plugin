@@ -19,6 +19,7 @@ RUN pip install --no-cache-dir -r /app/runtime/requirements.txt \
     && chown -R playmac:playmac /data /app /ms-playwright
 
 COPY runtime/playmac_article_worker.py /app/runtime/playmac_article_worker.py
+COPY runtime/game_article_common.html /app/runtime/game_article_common.html
 COPY service/runtime_server.py /app/service/runtime_server.py
 
 USER playmac

@@ -50,6 +50,7 @@ SOFTWARE_CATEGORIES = (
     (("office", "pdf", "办公", "文档"), "办公软件"),
     (("download", "下载"), "下载工具"),
 )
+GAME_ARTICLE_COMMON_HTML = Path(__file__).with_name("game_article_common.html").read_text(encoding="utf-8").strip()
 
 
 class WorkerError(RuntimeError):
@@ -423,25 +424,25 @@ def game_category(genres, description):
 def game_body(info, chinese_name, english_name, cover, screenshots):
     description = html.escape(clean_text(info.get("short_description")) or f"{chinese_name} 是一款 Mac 游戏。")
     detailed = str(info.get("detailed_description") or "")[:3000]
-    requirements = str((info.get("mac_requirements") or {}).get("minimum") or "操作系统: macOS 10.15 或更高")
+    detailed = re.sub(r'<h1\b[^>]*>\s*关于游戏\s*</h1>', "", detailed, count=1, flags=re.I)
+    release_date = html.escape(clean_text((info.get("release_date") or {}).get("date")) or "待填写")
     pieces = []
     if cover:
         pieces.extend(["<!-- playmac-game-cover:start -->", f'<p><img decoding="async" src="{cover}" alt="{html.escape(chinese_name, quote=True)}" /></p>', "<!-- playmac-game-cover:end -->"])
     pieces.extend([
         f"<p>{description}</p>",
-        '<h2><span style="color: red;">经验建议</span></h2>',
-        '<p>MacBook 长时间运行游戏时建议保持良好散热；大型游戏请优先使用外接电源并关闭不必要的后台程序。</p>',
-        '<h2>配置要求</h2>', f"<p>{requirements}</p>",
-        '<h2>安装方法</h2>',
-        '<p>打开安装包后，按包内提示将游戏拖入“应用程序”，或双击 .pkg 文件按默认选项完成安装。</p>',
-        '<h2>常见问题</h2>',
-        '<p>如遇到已损坏或无法打开，请先确认下载完整，再按文章中的 Mac 安全设置提示处理。</p>',
+        f"<p>发行日期：{release_date}</p>",
+        "&nbsp;",
+        "&nbsp;",
+        GAME_ARTICLE_COMMON_HTML,
+        '<h2><a id="%E5%85%B3%E4%BA%8E%E6%B8%B8%E6%88%8F" class="anchor" aria-hidden="true"></a>关于游戏</h2>',
+        detailed or "<p>Steam 暂未提供更多游戏介绍。</p>",
+        '<h2><a id="%E6%B8%B8%E6%88%8F%E6%88%AA%E5%9B%BE" class="anchor" aria-hidden="true"></a>游戏截图</h2>',
     ])
-    if detailed:
-        pieces.extend(["<h2>关于游戏</h2>", detailed])
     if screenshots:
-        pieces.append("<h2>游戏截图</h2>")
         pieces.extend(f'<p><img decoding="async" src="{url}" alt="" /></p>' for url in screenshots)
+    else:
+        pieces.append("<p>Steam 暂未提供游戏截图。</p>")
     return "\n".join(pieces)
 
 

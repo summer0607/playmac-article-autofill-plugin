@@ -107,6 +107,7 @@ class RuntimeWorkerTests(unittest.TestCase):
                     "screenshots": [{"path_full": "https://cdn.example/shot.jpg"}],
                     "genres": [{"description": "Action"}],
                     "supported_languages": "English, 简体中文",
+                    "release_date": {"date": "2026 年 2 月 27 日"},
                     "mac_requirements": {"minimum": "macOS 10.15"},
                 }}
             })
@@ -117,10 +118,20 @@ class RuntimeWorkerTests(unittest.TestCase):
             article = WORKER.import_steam("620", "/tmp/unused", skip_images=True)
         finally:
             WORKER.request = original
-        self.assertLess(article["content"].index("经验建议"), article["content"].index("配置要求"))
-        self.assertLess(article["content"].index("配置要求"), article["content"].index("安装方法"))
-        self.assertIn("游戏截图", article["content"])
+        expected_sections = ["一款动作冒险游戏。", "发行日期：2026 年 2 月 27 日", "经验建议", "注意事项", "安装方法", "常见问题", "关于游戏", "游戏截图"]
+        positions = [article["content"].index(section) for section in expected_sections]
+        self.assertEqual(positions, sorted(positions))
+        self.assertIn("Macs Fan Control", article["content"])
+        self.assertIn("【其他说明】", article["content"])
+        self.assertIn("2025年9月25日后发布的游戏内置了“CE修改器”", article["content"])
+        self.assertNotIn("配置要求", article["content"])
         self.assertNotIn("软件介绍", article["content"])
+
+    def test_steam_body_keeps_required_sections_without_optional_data(self):
+        content = WORKER.game_body({"short_description": "简介"}, "测试游戏", "Test Game", "", [])
+        self.assertIn("发行日期：待填写", content)
+        self.assertIn("Steam 暂未提供更多游戏介绍。", content)
+        self.assertIn("Steam 暂未提供游戏截图。", content)
 
     def test_macked_body_keeps_software_format(self):
         document = """
