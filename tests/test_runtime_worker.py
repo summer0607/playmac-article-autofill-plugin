@@ -39,6 +39,12 @@ class RuntimeWorkerTests(unittest.TestCase):
             def is_visible(self):
                 return self.kind in {"account", "button"} or self.page.account_mode
 
+            def is_checked(self):
+                return self.page.agreement_checked
+
+            def check(self, force=False):
+                self.page.agreement_checked = force
+
             def click(self):
                 if self.kind == "account":
                     self.page.account_mode = True
@@ -51,10 +57,13 @@ class RuntimeWorkerTests(unittest.TestCase):
         class Page:
             def __init__(self):
                 self.account_mode = False
+                self.agreement_checked = False
                 self.submitted = False
                 self.values = {}
 
             def locator(self, selector):
+                if "checkbox" in selector:
+                    return Locator(self, "agreement")
                 return Locator(self, "email" if "邮箱" in selector else "password")
 
             def get_by_text(self, _text, exact=False):
@@ -69,8 +78,20 @@ class RuntimeWorkerTests(unittest.TestCase):
         page = Page()
         WORKER.submit_qianfan_login_form(page, "user@example.com", "secret")
         self.assertTrue(page.account_mode)
+        self.assertTrue(page.agreement_checked)
         self.assertTrue(page.submitted)
         self.assertEqual(page.values, {"email": "user@example.com", "password": "secret"})
+
+    def test_qianfan_login_reports_password_mismatch(self):
+        class Body:
+            def inner_text(self):
+                return "邮箱密码不匹配，请检查邮箱密码是否正确"
+
+        class Page:
+            def locator(self, _selector):
+                return Body()
+
+        self.assertIn("邮箱或密码不正确", WORKER.qianfan_login_error(Page()))
 
     def test_rejects_unrelated_source(self):
         with self.assertRaises(WORKER.WorkerError):
@@ -131,6 +152,12 @@ class RuntimeWorkerTests(unittest.TestCase):
     def test_failed_login_does_not_replace_session(self):
         source = Path(WORKER_PATH).read_text(encoding="utf-8")
         self.assertLess(source.index("verify_qianfan(cookie)", source.index("def login")), source.index("Path(session_path).write_text", source.index("def login")))
+
+    def test_login_does_not_trust_initial_picture_space_url(self):
+        source = Path(WORKER_PATH).read_text(encoding="utf-8")
+        login_source = source[source.index("def login"):source.index("def main")]
+        self.assertNotIn('"pictureSpace" not in page.url', login_source)
+        self.assertIn("qianfan_picture_space_ready(page)", login_source)
 
 
 if __name__ == "__main__":

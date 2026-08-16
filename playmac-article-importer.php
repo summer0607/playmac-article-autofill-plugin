@@ -2,7 +2,7 @@
 /**
  * Plugin Name: PlayMac 文章自动补全
  * Description: 从 Steam 或 Macked 链接生成 PlayMac 游戏、软件文章草稿，并使用已验证的千帆图片外链。
- * Version: 3.0.1
+ * Version: 3.0.2
  * Author: PlayMac
  */
 
@@ -10,7 +10,7 @@ defined('ABSPATH') || exit;
 
 final class PlayMac_Article_Importer
 {
-    private const VERSION = '3.0.1';
+    private const VERSION = '3.0.2';
     private const AJAX_ACTION = 'playmac_article_import';
     private const AJAX_STATUS_ACTION = 'playmac_article_import_status';
     private const GITHUB_OWNER = 'summer0607';

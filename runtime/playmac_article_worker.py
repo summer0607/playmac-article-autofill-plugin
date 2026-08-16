@@ -165,12 +165,43 @@ def submit_qianfan_login_form(page, email, password):
         page.wait_for_timeout(300)
         email_input = first_visible(email_locator)
     password_input = first_visible(page.locator('input[placeholder*="密码"], input[type="password"]'))
-    login_button = first_visible(page.get_by_role("button", name=re.compile("登录|登陆|登入")))
+    login_button = first_visible(page.get_by_role("button", name=re.compile(r"登\s*[录陸]|登入")))
     if email_input is None or password_input is None or login_button is None:
         raise WorkerError("千帆账号登录表单未加载完成，请稍后重试")
     email_input.fill(email)
     password_input.fill(password)
+    agreement = first_visible(page.locator('input[type="checkbox"]'))
+    if agreement is not None and not agreement.is_checked():
+        agreement.check(force=True)
     login_button.click()
+
+
+def qianfan_login_error(page):
+    try:
+        page_text = page.locator("body").inner_text()
+    except Exception:
+        return ""
+    messages = (
+        ("邮箱密码不匹配", "千帆邮箱或密码不正确，请确认千帆账号后重试"),
+        ("账号或密码错误", "千帆邮箱或密码不正确，请确认千帆账号后重试"),
+        ("密码错误", "千帆邮箱或密码不正确，请确认千帆账号后重试"),
+        ("安全验证", "千帆要求完成安全验证，账号密码登录暂时无法完成"),
+        ("验证码", "千帆要求完成验证码，账号密码登录暂时无法完成"),
+    )
+    for marker, message in messages:
+        if marker in page_text:
+            return message
+    return ""
+
+
+def qianfan_login_form_ready(page):
+    email = first_visible(page.locator('input[placeholder*="邮箱"], input[type="email"], input[name*="email" i]'))
+    account_login = first_visible(page.get_by_text("账号登录", exact=True))
+    return email is not None or account_login is not None
+
+
+def qianfan_picture_space_ready(page):
+    return first_visible(page.get_by_text("上传本地图片", exact=True)) is not None
 
 
 def qianfan_folder(cookie, folder):
@@ -441,9 +472,28 @@ def login(session_path, email, password):
         context = browser.new_context(viewport={"width": 1440, "height": 900}, user_agent=USER_AGENT)
         page = context.new_page()
         page.goto(QIANFAN_URL, wait_until="domcontentloaded", timeout=60000)
-        if "pictureSpace" not in page.url:
+        picture_space_ready = False
+        login_form_ready = False
+        for _ in range(60):
+            if qianfan_picture_space_ready(page):
+                picture_space_ready = True
+                break
+            if qianfan_login_form_ready(page):
+                login_form_ready = True
+                break
+            page.wait_for_timeout(250)
+        if login_form_ready:
             submit_qianfan_login_form(page, email, password)
-            page.wait_for_timeout(8000)
+            for _ in range(80):
+                page.wait_for_timeout(250)
+                error = qianfan_login_error(page)
+                if error:
+                    raise WorkerError(error)
+                if qianfan_picture_space_ready(page):
+                    picture_space_ready = True
+                    break
+        if not picture_space_ready:
+            raise WorkerError("千帆登录未完成，请检查账号、密码或安全验证")
         cookies = context.cookies(["https://ark.xiaohongshu.com", "https://xiaohongshu.com"])
         browser.close()
     cookie = "; ".join(f"{item['name']}={item['value']}" for item in cookies)
