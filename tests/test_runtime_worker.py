@@ -198,6 +198,7 @@ class RuntimeWorkerTests(unittest.TestCase):
         self.assertNotIn("软件介绍", article["content"])
         self.assertEqual(len(article["image_urls"]), 6)
         self.assertEqual(article["content"].count("https://cdn.example/shot-"), 5)
+        self.assertEqual(article["categories"], ["动作冒险"])
         languages = next(item["desc"] for item in article["resource_info"] if item["title"] == "资源语言")
         self.assertEqual(languages, "简体中文、英语")
 
@@ -262,6 +263,19 @@ class RuntimeWorkerTests(unittest.TestCase):
         )
         self.assertEqual(content.split("游戏截图</h2>", 1)[1].count("<img "), 5)
         self.assertNotIn("<div>", content)
+
+    def test_steam_about_game_preserves_heading_and_paragraph_lines(self):
+        content = WORKER.steam_about_game({
+            "about_the_game": "<h2>核心玩法</h2><p>第一段<br>第二行</p><p><strong>■ 操作技巧</strong></p><h3>进阶技巧</h3><div>第三段</div><img src='ignored.jpg'>",
+        })
+        self.assertEqual(content.splitlines(), [
+            "<h3>核心玩法</h3>",
+            "<p>第一段</p>",
+            "<p>第二行</p>",
+            "<h4>操作技巧</h4>",
+            "<h4>进阶技巧</h4>",
+            "<p>第三段</p>",
+        ])
 
     def test_steam_body_keeps_required_sections_without_optional_data(self):
         content = WORKER.game_body({"short_description": "简介"}, "测试游戏", "Test Game", "", [])

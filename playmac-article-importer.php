@@ -2,7 +2,7 @@
 /**
  * Plugin Name: PlayMac 文章自动补全
  * Description: 从 Steam 或 Macked 链接生成 PlayMac 游戏、软件文章草稿，并使用已验证的千帆图片外链。
- * Version: 3.1.3
+ * Version: 3.1.4
  * Author: PlayMac
  */
 
@@ -10,7 +10,7 @@ defined('ABSPATH') || exit;
 
 final class PlayMac_Article_Importer
 {
-    private const VERSION = '3.1.3';
+    private const VERSION = '3.1.4';
     private const AJAX_ACTION = 'playmac_article_import';
     private const AJAX_STATUS_ACTION = 'playmac_article_import_status';
     private const AJAX_QR_START_ACTION = 'playmac_qianfan_qr_start';
@@ -525,6 +525,9 @@ final class PlayMac_Article_Importer
             }
             $matched = 0;
             foreach ($categories as $category) {
+                if ((int) $category->parent === 0) {
+                    continue;
+                }
                 $candidate = self::normalize_category_name($category->name);
                 if ($candidate === $target) {
                     $matched = (int) $category->term_id;
@@ -538,9 +541,9 @@ final class PlayMac_Article_Importer
             }
         }
         if (!$ids) {
-            $fallback = $kind === 'steam' ? 'Mac游戏' : 'Mac软件';
+            $fallback = $kind === 'steam' ? '动作冒险' : '实用工具';
             foreach ($categories as $category) {
-                if (self::normalize_category_name($category->name) === self::normalize_category_name($fallback)) {
+                if ((int) $category->parent !== 0 && self::normalize_category_name($category->name) === self::normalize_category_name($fallback)) {
                     $ids[] = (int) $category->term_id;
                     break;
                 }

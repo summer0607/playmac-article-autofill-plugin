@@ -494,6 +494,65 @@ class MetadataParser(HTMLParser):
             self.text.append(data.strip())
 
 
+class SteamAboutParser(HTMLParser):
+    HEADING_TAGS = {"h1": "h3", "h2": "h3", "h3": "h4", "h4": "h4", "h5": "h4", "h6": "h4"}
+    PARAGRAPH_TAGS = {"p", "div", "li"}
+
+    def __init__(self):
+        super().__init__()
+        self.blocks = []
+        self.current_tag = None
+        self.current_text = []
+
+    def flush(self):
+        if self.current_tag is None:
+            return
+        raw = html.unescape("".join(self.current_text))
+        lines = [re.sub(r"\s+", " ", line).strip() for line in raw.split("\n")]
+        for line in lines:
+            if line and line != "关于游戏":
+                tag = self.current_tag
+                if tag == "p" and re.match(r"^[■◆●▶▍※]\s*", line):
+                    tag = "h4"
+                    line = re.sub(r"^[■◆●▶▍※]\s*", "", line)
+                self.blocks.append((tag, line))
+        self.current_tag = None
+        self.current_text = []
+
+    def handle_starttag(self, tag, attrs):
+        name = tag.lower()
+        if name in self.HEADING_TAGS:
+            self.flush()
+            self.current_tag = self.HEADING_TAGS[name]
+        elif name in self.PARAGRAPH_TAGS:
+            self.flush()
+            self.current_tag = "p"
+        elif name == "br" and self.current_tag is not None:
+            self.current_text.append("\n")
+
+    def handle_endtag(self, tag):
+        name = tag.lower()
+        if name in self.HEADING_TAGS or name in self.PARAGRAPH_TAGS:
+            self.flush()
+
+    def handle_data(self, data):
+        if self.current_tag is None:
+            self.current_tag = "p"
+        self.current_text.append(data)
+
+    def render(self, limit=3000):
+        self.flush()
+        result = []
+        remaining = limit
+        for tag, text in self.blocks:
+            if remaining <= 0:
+                break
+            value = text[:remaining]
+            remaining -= len(value)
+            result.append(f"<{tag}>{html.escape(value)}</{tag}>")
+        return "\n".join(result)
+
+
 def pick_chinese_name(app_id, fallback):
     try:
         data = request(f"https://store.steampowered.com/api/appdetails?appids={app_id}&cc=cn&l=schinese").json()
@@ -543,10 +602,13 @@ def steam_screenshot_urls(info, store_source=""):
 
 def steam_about_game(info):
     source = info.get("about_the_game") or info.get("detailed_description") or ""
-    text = clean_text(source)
-    if not text:
+    parser = SteamAboutParser()
+    parser.feed(str(source))
+    parser.close()
+    content = parser.render()
+    if not content:
         return "<p>Steam 暂未提供更多游戏介绍。</p>"
-    return f"<p>{html.escape(text[:3000])}</p>"
+    return content
 
 
 def game_category(genres, description):
@@ -617,7 +679,7 @@ def import_steam(app_id, session_path, skip_images=False):
     chip = "✅M系列｜✅Intel" if "Apple Silicon" not in mac_raw else "✅M系列｜❌intel"
     version = "待填写"
     title = f"{chinese_name} Mac版 {english_name} For Mac v{version}|中文原生版"
-    return {"kind": "steam", "source_url": f"https://store.steampowered.com/app/{app_id}/", "title": title, "excerpt": clean_text(info.get("short_description")), "content": game_body(info, chinese_name, english_name, cover, screenshots), "categories": ["Mac游戏", category], "tags": unique([*genres, chinese_name, english_name]), "resource_info": [{"title": "资源版本", "desc": version}, {"title": "资源大小", "desc": "待填写"}, {"title": "资源类型", "desc": "原生版"}, {"title": "资源语言", "desc": languages}, {"title": "支持芯片", "desc": chip}, {"title": "系统要求", "desc": mac_raw or "macOS 10.15 及以上"}], "price": None, "seo": {"title": title, "keywords": ",".join(unique([chinese_name, english_name, *genres], 5)), "description": clean_text(info.get("short_description"))[:180]}, "cover_url": cover, "image_urls": [cover, *screenshots], "missing_fields": ["资源版本", "资源大小", "资源价格", "百度网盘", "夸克网盘"], "warnings": []}
+    return {"kind": "steam", "source_url": f"https://store.steampowered.com/app/{app_id}/", "title": title, "excerpt": clean_text(info.get("short_description")), "content": game_body(info, chinese_name, english_name, cover, screenshots), "categories": [category], "tags": unique([*genres, chinese_name, english_name]), "resource_info": [{"title": "资源版本", "desc": version}, {"title": "资源大小", "desc": "待填写"}, {"title": "资源类型", "desc": "原生版"}, {"title": "资源语言", "desc": languages}, {"title": "支持芯片", "desc": chip}, {"title": "系统要求", "desc": mac_raw or "macOS 10.15 及以上"}], "price": None, "seo": {"title": title, "keywords": ",".join(unique([chinese_name, english_name, *genres], 5)), "description": clean_text(info.get("short_description"))[:180]}, "cover_url": cover, "image_urls": [cover, *screenshots], "missing_fields": ["资源版本", "资源大小", "资源价格", "百度网盘", "夸克网盘"], "warnings": []}
 
 
 def macked_category(source):
