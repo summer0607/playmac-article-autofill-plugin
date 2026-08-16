@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -24,6 +25,61 @@ class Response:
 
 
 class RuntimeWorkerTests(unittest.TestCase):
+    def test_image_sources_ignore_query_duplicates(self):
+        sources = WORKER.unique_image_sources([
+            "https://cdn.example/image.jpg?t=1",
+            "https://cdn.example/image.jpg?t=2",
+            "https://cdn.example/other.jpg",
+        ])
+        self.assertEqual(sources, ["https://cdn.example/image.jpg?t=1", "https://cdn.example/other.jpg"])
+
+    def test_image_fingerprint_index_reuses_existing_qianfan_link(self):
+        with tempfile.TemporaryDirectory() as directory:
+            first = Path(directory) / "first.jpg"
+            second = Path(directory) / "second.png"
+            first.write_bytes(b"same-image-content")
+            second.write_bytes(b"same-image-content")
+            unique_files = WORKER.deduplicate_image_files([first, second])
+            self.assertEqual(unique_files, [first])
+            fingerprint = WORKER.image_fingerprint(first)
+            index_path = Path(directory) / "qianfan-image-index.json"
+            link = "https://qimg.xiaohongshu.com/arkgoods/existing"
+            WORKER.save_qianfan_image_index(index_path, {fingerprint: link})
+            self.assertEqual(WORKER.load_qianfan_image_index(index_path)[fingerprint], link)
+            self.assertEqual(index_path.stat().st_mode & 0o777, 0o600)
+
+    def test_upload_images_returns_indexed_link_without_browser_upload(self):
+        with tempfile.TemporaryDirectory() as directory:
+            session_path = Path(directory) / "qianfan-session.json"
+            image_path = Path(directory) / "cover.jpg"
+            image_path.write_bytes(b"already-uploaded-image")
+            fingerprint = WORKER.image_fingerprint(image_path)
+            link = "https://qimg.xiaohongshu.com/arkgoods/existing"
+            WORKER.save_qianfan_image_index(session_path.with_name("qianfan-image-index.json"), {fingerprint: link})
+
+            class ImageResponse:
+                status_code = 200
+                content = b"image"
+
+            original_load_session = WORKER.load_session
+            original_verify = WORKER.verify_qianfan
+            original_folder = WORKER.qianfan_folder
+            original_find_link = WORKER.qianfan_find_link
+            original_get = WORKER.requests.get
+            WORKER.load_session = lambda _path: "cookie"
+            WORKER.verify_qianfan = lambda _cookie: None
+            WORKER.qianfan_folder = lambda _cookie, _folder: "folder-id"
+            WORKER.qianfan_find_link = lambda *_args: self.fail("已有内容指纹时不应查询或上传千帆图片")
+            WORKER.requests.get = lambda *_args, **_kwargs: ImageResponse()
+            try:
+                self.assertEqual(WORKER.upload_images(session_path, [image_path]), [link])
+            finally:
+                WORKER.load_session = original_load_session
+                WORKER.verify_qianfan = original_verify
+                WORKER.qianfan_folder = original_folder
+                WORKER.qianfan_find_link = original_find_link
+                WORKER.requests.get = original_get
+
     def test_qianfan_login_switches_to_account_form(self):
         class Locator:
             def __init__(self, page, kind):

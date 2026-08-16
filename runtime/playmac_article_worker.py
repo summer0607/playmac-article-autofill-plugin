@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import html
 import json
 import os
@@ -73,6 +74,62 @@ def unique(values, limit=8):
 def clean_text(value):
     text = re.sub(r"<[^>]+>", " ", str(value or ""))
     return re.sub(r"\s+", " ", html.unescape(text)).strip()
+
+
+def unique_image_sources(values, limit=8):
+    result, seen = [], set()
+    for value in values:
+        source = str(value or "").strip()
+        if not source:
+            continue
+        parsed = urlparse(source)
+        key = (parsed.scheme.casefold(), parsed.netloc.casefold(), parsed.path, parsed.params)
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(source)
+        if len(result) >= limit:
+            break
+    return result
+
+
+def image_fingerprint(path):
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def deduplicate_image_files(paths):
+    result, seen = [], set()
+    for path in paths:
+        fingerprint = image_fingerprint(path)
+        if fingerprint in seen:
+            continue
+        seen.add(fingerprint)
+        result.append(Path(path))
+    return result
+
+
+def load_qianfan_image_index(path):
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        return {}
+    images = data.get("images") if isinstance(data, dict) else None
+    if not isinstance(images, dict):
+        return {}
+    return {str(key): str(value) for key, value in images.items() if re.fullmatch(r"[a-f0-9]{64}", str(key)) and re.match(r"^https://qimg\.xiaohongshu\.com/", str(value))}
+
+
+def save_qianfan_image_index(path, images):
+    output = Path(path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    temporary = output.with_suffix(".tmp")
+    temporary.write_text(json.dumps({"version": 1, "images": images}, ensure_ascii=False), encoding="utf-8")
+    os.chmod(temporary, 0o600)
+    temporary.replace(output)
 
 
 def parse_source(value):
@@ -304,7 +361,7 @@ def qianfan_folder(cookie, folder):
 
 
 def qianfan_find_link(cookie, folder_id, filename):
-    payload = {"filter": {"keyword": "", "statuses": [1], "basicTypes": [2], "fatherDirectoryId": folder_id}, "order": {"orderList": [{"field": "createTime", "asc": False}]}, "pageIndex": 1, "pageSize": 100, "option": {"withDetail": True}}
+    payload = {"filter": {"keyword": Path(filename).stem, "statuses": [1], "basicTypes": [2], "fatherDirectoryId": folder_id}, "order": {"orderList": [{"field": "createTime", "asc": False}]}, "pageIndex": 1, "pageSize": 100, "option": {"withDetail": True}}
     response = requests.post(f"{QIANFAN_API}/search_directory_manageable", headers=qianfan_headers(cookie, True), json=payload, timeout=30)
     response.raise_for_status()
     for item in (response.json().get("data") or {}).get("directoryManageables", []):
@@ -334,15 +391,46 @@ def download_image(url, filename, referer):
     return output
 
 
+def qianfan_image_available(link):
+    if not re.match(r"^https://qimg\.xiaohongshu\.com/", str(link or "")):
+        return False
+    try:
+        check = requests.get(link, headers={"User-Agent": USER_AGENT, "Referer": "https://ark.xiaohongshu.com/"}, timeout=30)
+    except requests.RequestException:
+        return False
+    return check.status_code == 200 and bool(check.content)
+
+
 def upload_images(session_path, images, folder="PlayMac"):
     cookie = load_session(session_path)
     verify_qianfan(cookie)
+    folder_id = qianfan_folder(cookie, folder)
+    index_path = Path(session_path).with_name("qianfan-image-index.json")
+    image_index = load_qianfan_image_index(index_path)
+    image_paths = deduplicate_image_files(images)
+    results = [""] * len(image_paths)
+    pending = []
+    for position, path in enumerate(image_paths):
+        fingerprint = image_fingerprint(path)
+        filename = f"sha256-{fingerprint}{path.suffix.lower()}"
+        link = image_index.get(fingerprint, "")
+        if not qianfan_image_available(link):
+            image_index.pop(fingerprint, None)
+            link = qianfan_find_link(cookie, folder_id, filename)
+        if not link and path.name != filename:
+            link = qianfan_find_link(cookie, folder_id, path.name)
+        if qianfan_image_available(link):
+            image_index[fingerprint] = link
+            save_qianfan_image_index(index_path, image_index)
+            results[position] = link
+        else:
+            pending.append((position, path, fingerprint, filename))
+    if not pending:
+        return results
     try:
         from playwright.sync_api import sync_playwright
     except ImportError as exc:
         raise WorkerError("插件图片组件未初始化，请先在设置中初始化") from exc
-    folder_id = qianfan_folder(cookie, folder)
-    results = []
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         context = browser.new_context(viewport={"width": 1440, "height": 900}, permissions=["clipboard-read", "clipboard-write"])
@@ -352,28 +440,30 @@ def upload_images(session_path, images, folder="PlayMac"):
         page.get_by_text("上传本地图片", exact=True).wait_for(state="visible", timeout=30000)
         page.get_by_text(folder, exact=True).first.click()
         page.wait_for_timeout(800)
-        for path in images:
-            filename = path.name
-            link = qianfan_find_link(cookie, folder_id, filename)
-            if not link:
-                page.get_by_text("上传本地图片", exact=True).click()
-                picker = page.locator('input[type="file"]')
-                picker.set_input_files(str(path))
-                page.get_by_text("本次共成功上传1个文件", exact=True).wait_for(state="visible", timeout=60000)
-                close = page.get_by_text("关闭", exact=True)
-                if close.count():
-                    close.click()
-                for _ in range(12):
-                    link = qianfan_find_link(cookie, folder_id, filename)
-                    if link:
-                        break
-                    page.wait_for_timeout(500)
+        for position, path, fingerprint, filename in pending:
+            page.get_by_text("上传本地图片", exact=True).click()
+            picker = page.locator('input[type="file"]')
+            upload_path = path.with_name(filename)
+            if upload_path != path:
+                shutil.copyfile(path, upload_path)
+            picker.set_input_files(str(upload_path))
+            page.get_by_text("本次共成功上传1个文件", exact=True).wait_for(state="visible", timeout=60000)
+            close = page.get_by_text("关闭", exact=True)
+            if close.count():
+                close.click()
+            link = ""
+            for _ in range(12):
+                link = qianfan_find_link(cookie, folder_id, filename)
+                if link:
+                    break
+                page.wait_for_timeout(500)
             if not re.match(r"^https://qimg\.xiaohongshu\.com/", link or ""):
                 raise WorkerError("千帆图片上传后未返回可用外链")
-            check = requests.get(link, headers={"User-Agent": USER_AGENT, "Referer": "https://ark.xiaohongshu.com/"}, timeout=30)
-            if check.status_code != 200 or not check.content:
+            if not qianfan_image_available(link):
                 raise WorkerError("千帆图片外链校验失败")
-            results.append(link)
+            image_index[fingerprint] = link
+            save_qianfan_image_index(index_path, image_index)
+            results[position] = link
         browser.close()
     return results
 
@@ -439,6 +529,7 @@ def game_body(info, chinese_name, english_name, cover, screenshots):
         detailed or "<p>Steam 暂未提供更多游戏介绍。</p>",
         '<h2><a id="%E6%B8%B8%E6%88%8F%E6%88%AA%E5%9B%BE" class="anchor" aria-hidden="true"></a>游戏截图</h2>',
     ])
+    screenshots = unique_image_sources(screenshots)
     if screenshots:
         pieces.extend(f'<p><img decoding="async" src="{url}" alt="" /></p>' for url in screenshots)
     else:
@@ -453,8 +544,7 @@ def import_steam(app_id, session_path, skip_images=False):
         raise WorkerError("Steam 没有返回可用的游戏资料")
     english_name = clean_text(info.get("name"))
     chinese_name = pick_chinese_name(app_id, english_name)
-    image_urls = [str(info.get("header_image") or ""), *(str(item.get("path_full") or "") for item in (info.get("screenshots") or [])[:6])]
-    image_urls = [item for item in image_urls if item]
+    image_urls = unique_image_sources([str(info.get("header_image") or ""), *(str(item.get("path_full") or "") for item in (info.get("screenshots") or [])[:6])], 7)
     if not image_urls:
         raise WorkerError("Steam 没有提供可用图片")
     if skip_images:
@@ -490,6 +580,7 @@ def macked_category(source):
 def macked_body(name, info, cover, previews):
     introduction = html.escape(info["description"] or f"{name} 是一款适用于 Mac 的实用软件。")
     pieces = [f'<p class="playmac-software-cover"><img decoding="async" src="{cover}" alt="{html.escape(name, quote=True)}" /></p>', f"<p>{introduction}</p>", "<h2>常见问题</h2>", "<p>安装前请确认系统版本符合要求；如打开受阻，请按 macOS 的安全提示完成允许操作。</p>", "<h2>激活方式</h2>", f"<p>{html.escape(info['activation'] or '免激活，安装后即可使用。')}</p>", "<h2>功能介绍</h2>", f"<p>{introduction}</p>"]
+    previews = unique_image_sources(previews, 4)
     if previews:
         pieces.append("<h2>软件截图</h2>")
         pieces.extend(f'<p><img decoding="async" src="{url}" alt="" /></p>' for url in previews)
@@ -522,7 +613,7 @@ def import_macked(source_url, session_path, skip_images=False):
     title = re.sub(r"\s+", " ", title).strip(" -|｜")
     if not title:
         title = raw_title
-    image_sources = unique([parser.meta.get("og:image", ""), *parser.images], 5)
+    image_sources = unique_image_sources([parser.meta.get("og:image", ""), *parser.images], 5)
     image_sources = [url for url in image_sources if url.startswith(("http://", "https://"))]
     if not image_sources:
         raise WorkerError("Macked 页面没有可用图片")
