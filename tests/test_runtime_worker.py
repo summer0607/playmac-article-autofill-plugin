@@ -194,6 +194,7 @@ class RuntimeWorkerTests(unittest.TestCase):
         self.assertEqual(positions, sorted(positions))
         self.assertIn("Macs Fan Control", article["content"])
         self.assertIn("【其他说明】", article["content"])
+        self.assertIn('<div class="playmac-game-common" style="white-space: pre-line;">', article["content"])
         self.assertIn("2025年9月25日后发布的游戏内置了“CE修改器”", article["content"])
         self.assertNotIn("配置要求", article["content"])
         self.assertNotIn("软件介绍", article["content"])

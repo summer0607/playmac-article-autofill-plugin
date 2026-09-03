@@ -650,7 +650,7 @@ def game_body(info, chinese_name, english_name, cover, screenshots):
         f"<p>发行日期：{release_date}</p>",
         "&nbsp;",
         "&nbsp;",
-        GAME_ARTICLE_COMMON_HTML,
+        '<div class="playmac-game-common" style="white-space: pre-line;">' + GAME_ARTICLE_COMMON_HTML + '</div>',
         '<h2><a id="%E5%85%B3%E4%BA%8E%E6%B8%B8%E6%88%8F" class="anchor" aria-hidden="true"></a>关于游戏</h2>',
         '<div class="playmac-steam-about">' + detailed + '</div>',
         '<h2><a id="%E6%B8%B8%E6%88%8F%E6%88%AA%E5%9B%BE" class="anchor" aria-hidden="true"></a>游戏截图</h2>',

@@ -88,6 +88,17 @@ def main():
                 assert 'playmac-steam-original-' not in saved, 'Editor-only marker leaked into saved article'
                 page.goto(created["url"], wait_until="domcontentloaded")
                 page.locator('.playmac-steam-about').wait_for()
+                common = page.locator('.playmac-game-common')
+                common.wait_for()
+                assert common.evaluate("e => getComputedStyle(e).whiteSpace") == "pre-line"
+                alert = page.locator('.ri-alerts-shortcode .alert').first
+                alert_lines = alert.evaluate('''e => {
+                    const range = document.createRange();
+                    const text = Array.from(e.childNodes).find(n => n.nodeType === Node.TEXT_NODE && n.textContent.includes('【其他说明】'));
+                    range.selectNodeContents(text);
+                    return new Set(Array.from(range.getClientRects()).map(r => Math.round(r.top))).size;
+                }''')
+                assert alert_lines >= 3, 'Attention notes lost their visible line breaks'
                 result = page.evaluate('''(source) => {
                     const template = document.createElement('template');
                     template.innerHTML = source;
