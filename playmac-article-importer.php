@@ -2,7 +2,7 @@
 /**
  * Plugin Name: PlayMac 文章自动补全
  * Description: 从 Steam 或 Macked 链接生成 PlayMac 游戏、软件文章草稿，并使用已验证的千帆图片外链。
- * Version: 3.1.4
+ * Version: 3.1.5
  * Author: PlayMac
  */
 
@@ -10,7 +10,7 @@ defined('ABSPATH') || exit;
 
 final class PlayMac_Article_Importer
 {
-    private const VERSION = '3.1.4';
+    private const VERSION = '3.1.5';
     private const AJAX_ACTION = 'playmac_article_import';
     private const AJAX_STATUS_ACTION = 'playmac_article_import_status';
     private const AJAX_QR_START_ACTION = 'playmac_qianfan_qr_start';
@@ -43,6 +43,34 @@ final class PlayMac_Article_Importer
         add_filter('site_transient_update_plugins', array(__CLASS__, 'inject_github_update'));
         add_filter('plugins_api', array(__CLASS__, 'github_plugin_info'), 20, 3);
         add_filter('plugin_action_links_' . plugin_basename(__FILE__), array(__CLASS__, 'add_update_link'));
+        add_action('wp_enqueue_scripts', array(__CLASS__, 'enqueue_steam_media'));
+        add_filter('wp_kses_allowed_html', array(__CLASS__, 'allow_steam_video_attributes'), 10, 2);
+    }
+
+    public static function allow_steam_video_attributes(array $tags, $context): array
+    {
+        if ($context === 'post') {
+            // No inline event handlers: frontend.js handles playback/contextmenu.
+            foreach (array('autoplay', 'muted', 'playsinline', 'loop', 'controlslist', 'disablepictureinpicture', 'disableremoteplayback', 'crossorigin') as $attribute) {
+                $tags['video'][$attribute] = true;
+            }
+            $tags['source'] = array_merge($tags['source'] ?? array(), array('src' => true, 'type' => true, 'media' => true));
+        }
+        return $tags;
+    }
+
+    public static function enqueue_steam_media(): void
+    {
+        if (!is_singular('post')) {
+            return;
+        }
+        $post = get_queried_object();
+        if (!$post instanceof WP_Post || strpos($post->post_content, 'class="playmac-steam-about"') === false) {
+            return;
+        }
+        $base = plugin_dir_url(__FILE__);
+        wp_enqueue_style('playmac-steam-media', $base . 'assets/frontend.css', array(), self::VERSION);
+        wp_enqueue_script('playmac-steam-media', $base . 'assets/frontend.js', array(), self::VERSION, true);
     }
 
     public static function activate(): void

@@ -170,6 +170,7 @@ class RuntimeWorkerTests(unittest.TestCase):
                 "620": {"data": {
                     "name": "Portal 2",
                     "short_description": "一款动作冒险游戏。",
+                    "about_the_game": "<h2>原文标题</h2><p>完整介绍。</p>",
                     "header_image": "https://cdn.example/cover.jpg",
                     "screenshots": [{"path_full": f"https://cdn.example/shot-{index}.jpg"} for index in range(7)],
                     "genres": [{"description": "Action"}],
@@ -211,6 +212,7 @@ class RuntimeWorkerTests(unittest.TestCase):
             return Response({"730": {"data": {
                 "name": "Test Game",
                 "short_description": "简介",
+                "about_the_game": "<p>完整游戏介绍</p>",
                 "header_image": "https://cdn.example/cover.jpg",
                 "screenshots": screenshots,
                 "genres": [],
@@ -255,32 +257,25 @@ class RuntimeWorkerTests(unittest.TestCase):
 
     def test_steam_about_game_cannot_break_screenshot_section(self):
         content = WORKER.game_body(
-            {"short_description": "简介", "detailed_description": "<div>" + ("介绍" * 2000)},
+            {"short_description": "简介", "about_the_game": "<div>" + ("介绍" * 2000)},
             "测试游戏",
             "Test Game",
             "https://qimg.xiaohongshu.com/cover",
             [f"https://qimg.xiaohongshu.com/shot-{index}" for index in range(5)],
         )
         self.assertEqual(content.split("游戏截图</h2>", 1)[1].count("<img "), 5)
-        self.assertNotIn("<div>", content)
+        self.assertIn("<div>" + ("介绍" * 2000) + "</div></div>", content)
 
     def test_steam_about_game_preserves_heading_and_paragraph_lines(self):
         content = WORKER.steam_about_game({
             "about_the_game": "<h2>核心玩法</h2><p>第一段<br>第二行</p><p><strong>■ 操作技巧</strong></p><h3>进阶技巧</h3><div>第三段</div><img src='ignored.jpg'>",
         })
-        self.assertEqual(content.splitlines(), [
-            "<h3>核心玩法</h3>",
-            "<p>第一段</p>",
-            "<p>第二行</p>",
-            "<h4>操作技巧</h4>",
-            "<h4>进阶技巧</h4>",
-            "<p>第三段</p>",
-        ])
+        self.assertEqual(content, '<h2>核心玩法</h2><p>第一段<br>第二行</p><p><strong>■ 操作技巧</strong></p><h3>进阶技巧</h3><div>第三段</div><img src="ignored.jpg">')
 
     def test_steam_body_keeps_required_sections_without_optional_data(self):
-        content = WORKER.game_body({"short_description": "简介"}, "测试游戏", "Test Game", "", [])
+        content = WORKER.game_body({"short_description": "简介", "about_the_game": "<p>完整介绍</p>"}, "测试游戏", "Test Game", "", [])
         self.assertIn("发行日期：待填写", content)
-        self.assertIn("Steam 暂未提供更多游戏介绍。", content)
+        self.assertIn("<p>完整介绍</p>", content)
         self.assertIn("Steam 暂未提供游戏截图。", content)
 
     def test_macked_body_keeps_software_format(self):

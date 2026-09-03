@@ -495,62 +495,75 @@ class MetadataParser(HTMLParser):
 
 
 class SteamAboutParser(HTMLParser):
-    HEADING_TAGS = {"h1": "h3", "h2": "h3", "h3": "h4", "h4": "h4", "h5": "h4", "h6": "h4"}
-    PARAGRAPH_TAGS = {"p", "div", "li"}
+    """Preserve Steam text and structure; harden media, remove active HTML."""
+
+    BLOCKED = {"script", "style", "iframe", "object", "embed", "form", "input", "button", "svg", "math"}
+    VOID = {"img", "br", "hr", "source", "wbr", "input", "embed"}
+    ALLOWED = {"h1", "h2", "h3", "h4", "h5", "h6", "p", "div", "span", "strong", "b", "em", "i", "u", "s", "small", "sub", "sup", "ul", "ol", "li", "br", "hr", "a", "img", "video", "source", "table", "thead", "tbody", "tfoot", "tr", "th", "td", "pre", "code", "blockquote", "wbr"}
+    ATTRIBUTES = {"class", "id", "title", "aria-hidden", "href", "target", "rel", "src", "alt", "width", "height", "poster", "preload", "loop", "crossorigin", "type", "media", "start", "reversed", "colspan", "rowspan"}
 
     def __init__(self):
-        super().__init__()
-        self.blocks = []
-        self.current_tag = None
-        self.current_text = []
-
-    def flush(self):
-        if self.current_tag is None:
-            return
-        raw = html.unescape("".join(self.current_text))
-        lines = [re.sub(r"\s+", " ", line).strip() for line in raw.split("\n")]
-        for line in lines:
-            if line and line != "关于游戏":
-                tag = self.current_tag
-                if tag == "p" and re.match(r"^[■◆●▶▍※]\s*", line):
-                    tag = "h4"
-                    line = re.sub(r"^[■◆●▶▍※]\s*", "", line)
-                self.blocks.append((tag, line))
-        self.current_tag = None
-        self.current_text = []
+        super().__init__(convert_charrefs=False)
+        self.parts = []
+        self.blocked = []
+        self.open_tags = []
 
     def handle_starttag(self, tag, attrs):
-        name = tag.lower()
-        if name in self.HEADING_TAGS:
-            self.flush()
-            self.current_tag = self.HEADING_TAGS[name]
-        elif name in self.PARAGRAPH_TAGS:
-            self.flush()
-            self.current_tag = "p"
-        elif name == "br" and self.current_tag is not None:
-            self.current_text.append("\n")
+        if self.blocked or tag in self.BLOCKED:
+            if tag not in self.VOID:
+                self.blocked.append(tag)
+            return
+        if tag not in self.ALLOWED:
+            return
+        values = []
+        for key, value in attrs:
+            if key not in self.ATTRIBUTES:
+                continue
+            if key in {"href", "src", "poster"} and value:
+                scheme = urlparse(re.sub(r"[\x00-\x20]", "", value)).scheme.lower()
+                if scheme and scheme not in {"http", "https"}:
+                    continue
+            values.append(key if value is None else f'{key}="{html.escape(value, quote=True)}"')
+        if tag == "video":
+            values.extend(['autoplay', 'muted', 'playsinline', 'disablepictureinpicture', 'disableremoteplayback', 'controlslist="nodownload nofullscreen noremoteplayback"'])
+        self.parts.append("<" + tag + (" " + " ".join(values) if values else "") + ">")
+        if tag not in self.VOID:
+            self.open_tags.append(tag)
+
+    def handle_startendtag(self, tag, attrs):
+        self.handle_starttag(tag, attrs)
+        if tag not in self.VOID:
+            self.handle_endtag(tag)
 
     def handle_endtag(self, tag):
-        name = tag.lower()
-        if name in self.HEADING_TAGS or name in self.PARAGRAPH_TAGS:
-            self.flush()
+        if self.blocked:
+            if tag == self.blocked[-1]:
+                self.blocked.pop()
+            return
+        if tag in self.open_tags:
+            while self.open_tags:
+                current = self.open_tags.pop()
+                self.parts.append(f"</{current}>")
+                if current == tag:
+                    break
 
     def handle_data(self, data):
-        if self.current_tag is None:
-            self.current_tag = "p"
-        self.current_text.append(data)
+        if not self.blocked:
+            self.parts.append(data)
 
-    def render(self, limit=3000):
-        self.flush()
-        result = []
-        remaining = limit
-        for tag, text in self.blocks:
-            if remaining <= 0:
-                break
-            value = text[:remaining]
-            remaining -= len(value)
-            result.append(f"<{tag}>{html.escape(value)}</{tag}>")
-        return "\n".join(result)
+    def handle_entityref(self, name):
+        if not self.blocked:
+            self.parts.append(f"&{name};")
+
+    def handle_charref(self, name):
+        if not self.blocked:
+            self.parts.append(f"&#{name};")
+
+    def render(self):
+        # Balance malformed source so it cannot swallow later article sections.
+        while self.open_tags:
+            self.parts.append(f"</{self.open_tags.pop()}>")
+        return "".join(self.parts)
 
 
 def pick_chinese_name(app_id, fallback):
@@ -601,13 +614,15 @@ def steam_screenshot_urls(info, store_source=""):
 
 
 def steam_about_game(info):
-    source = info.get("about_the_game") or info.get("detailed_description") or ""
+    source = str(info.get("about_the_game") or "")
+    if not source.strip():
+        raise WorkerError("Steam 未返回完整的“关于本游戏”内容，已停止保存，请稍后重试")
     parser = SteamAboutParser()
     parser.feed(str(source))
     parser.close()
     content = parser.render()
-    if not content:
-        return "<p>Steam 暂未提供更多游戏介绍。</p>"
+    if not content.strip():
+        raise WorkerError("Steam 的“关于本游戏”内容为空，已停止保存")
     return content
 
 
@@ -633,7 +648,7 @@ def game_body(info, chinese_name, english_name, cover, screenshots):
         "&nbsp;",
         GAME_ARTICLE_COMMON_HTML,
         '<h2><a id="%E5%85%B3%E4%BA%8E%E6%B8%B8%E6%88%8F" class="anchor" aria-hidden="true"></a>关于游戏</h2>',
-        detailed or "<p>Steam 暂未提供更多游戏介绍。</p>",
+        '<div class="playmac-steam-about">' + detailed + '</div>',
         '<h2><a id="%E6%B8%B8%E6%88%8F%E6%88%AA%E5%9B%BE" class="anchor" aria-hidden="true"></a>游戏截图</h2>',
     ])
     screenshots = unique_image_sources(screenshots, STEAM_SCREENSHOT_COUNT)
@@ -641,7 +656,8 @@ def game_body(info, chinese_name, english_name, cover, screenshots):
         pieces.extend(f'<p><img decoding="async" src="{url}" alt="" /></p>' for url in screenshots)
     else:
         pieces.append("<p>Steam 暂未提供游戏截图。</p>")
-    return "\n".join(pieces)
+    # Keep WordPress from splitting/merging Steam's original paragraphs.
+    return "<!-- wp:html -->\n" + "\n".join(pieces) + "\n<!-- /wp:html -->"
 
 
 def import_steam(app_id, session_path, skip_images=False):
@@ -649,6 +665,7 @@ def import_steam(app_id, session_path, skip_images=False):
     info = response.get(str(app_id), {}).get("data") or {}
     if not info.get("name"):
         raise WorkerError("Steam 没有返回可用的游戏资料")
+    steam_about_game(info)  # Reject incomplete source before any image transfers.
     english_name = clean_text(info.get("name"))
     chinese_name = pick_chinese_name(app_id, english_name)
     try:

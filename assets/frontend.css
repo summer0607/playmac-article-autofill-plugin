@@ -1,0 +1,14 @@
+/* Scoped to Steam's original About section; never restyle other article media. */
+.playmac-steam-about video,
+.playmac-steam-about img { max-width: 100%; height: auto; }
+.playmac-steam-about video { display: block; width: 100%; }
+.playmac-steam-about .bb_img_ctn { display: block; }
+.playmac-steam-about .bb_paragraph { margin: 0 0 1em; }
+.playmac-steam-about h1 { font-size: 2em; }
+.playmac-steam-about h2 { font-size: 1.5em; }
+.playmac-steam-about h3 { font-size: 1.25em; }
+.playmac-steam-about h4 { font-size: 1.1em; }
+.playmac-steam-about h5 { font-size: 1em; }
+.playmac-steam-about h6 { font-size: .9em; }
+.playmac-steam-about video::-webkit-media-controls,
+.playmac-steam-about video::-webkit-media-controls-enclosure { display: none !important; }
