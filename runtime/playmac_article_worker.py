@@ -499,8 +499,8 @@ class SteamAboutParser(HTMLParser):
 
     BLOCKED = {"script", "style", "iframe", "object", "embed", "form", "input", "button", "svg", "math"}
     VOID = {"img", "br", "hr", "source", "wbr", "input", "embed"}
-    ALLOWED = {"h1", "h2", "h3", "h4", "h5", "h6", "p", "div", "span", "strong", "b", "em", "i", "u", "s", "small", "sub", "sup", "ul", "ol", "li", "br", "hr", "a", "img", "video", "source", "table", "thead", "tbody", "tfoot", "tr", "th", "td", "pre", "code", "blockquote", "wbr"}
-    ATTRIBUTES = {"class", "id", "title", "aria-hidden", "href", "target", "rel", "src", "alt", "width", "height", "poster", "preload", "loop", "crossorigin", "type", "media", "start", "reversed", "colspan", "rowspan"}
+    ALLOWED = {"h1", "h2", "h3", "h4", "h5", "h6", "p", "div", "span", "strong", "b", "em", "i", "u", "s", "small", "sub", "sup", "ul", "ol", "li", "br", "hr", "a", "img", "picture", "video", "source", "table", "thead", "tbody", "tfoot", "tr", "th", "td", "pre", "code", "blockquote", "wbr"}
+    ATTRIBUTES = {"class", "id", "title", "aria-hidden", "href", "target", "rel", "src", "srcset", "sizes", "alt", "width", "height", "poster", "preload", "loop", "crossorigin", "type", "media", "start", "reversed", "colspan", "rowspan"}
 
     def __init__(self):
         super().__init__(convert_charrefs=False)
@@ -519,6 +519,10 @@ class SteamAboutParser(HTMLParser):
         for key, value in attrs:
             if key not in self.ATTRIBUTES:
                 continue
+            if key == "srcset" and value:
+                candidates = [part.strip().split()[0] for part in value.split(",") if part.strip()]
+                if any(urlparse(re.sub(r"[\x00-\x20]", "", candidate)).scheme.lower() not in {"", "http", "https"} for candidate in candidates):
+                    continue
             if key in {"href", "src", "poster"} and value:
                 scheme = urlparse(re.sub(r"[\x00-\x20]", "", value)).scheme.lower()
                 if scheme and scheme not in {"http", "https"}:

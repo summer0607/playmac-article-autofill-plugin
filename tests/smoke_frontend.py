@@ -67,7 +67,7 @@ def main():
                     template.innerHTML = source;
                     const actual = document.querySelector('.playmac-steam-about');
                     const blocks = root => Array.from(root.querySelectorAll('h1,h2,h3,h4,h5,h6,p,li,br')).map(e => [e.tagName, e.textContent]);
-                    const media = root => Array.from(root.querySelectorAll('img,video,source')).map(e => [e.tagName, e.getAttribute('src'), e.getAttribute('poster'), e.getAttribute('type')]);
+                    const media = root => Array.from(root.querySelectorAll('picture,img,video,source')).map(e => [e.tagName, e.getAttribute('src'), e.getAttribute('srcset'), e.getAttribute('sizes'), e.getAttribute('poster'), e.getAttribute('type')]);
                     return {
                         text: template.content.textContent === actual.textContent,
                         blocks: JSON.stringify(blocks(template.content)) === JSON.stringify(blocks(actual)),

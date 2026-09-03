@@ -4,6 +4,12 @@ from test_runtime_worker import WORKER
 
 
 class SteamFidelityTests(unittest.TestCase):
+    def test_animated_picture_keeps_srcset_and_fallback(self):
+        source = '<p><picture><source srcset="https://shared.akamai.steamstatic.com/animated.webp?t=123" type="image/webp"><img src="https://shared.akamai.steamstatic.com/poster.avif?t=123" sizes="100vw"></picture></p>'
+        self.assertEqual(source, WORKER.steam_about_game({'about_the_game': source}))
+        unsafe = '<picture><source srcset="https://example.com/a.webp 1x, javascript:bad() 2x"><img src="https://example.com/fallback.jpg"></picture>'
+        self.assertNotIn('srcset', WORKER.steam_about_game({'about_the_game': unsafe}))
+
     def test_about_is_complete_not_combined_description(self):
         about = '<h2>游戏特色</h2><p>' + '完整段落，保持原文。' * 800 + '</p><h3>次级标题</h3><p>结尾内容</p>'
         body = WORKER.game_body({'about_the_game': about, 'detailed_description': '<h2>评测和广告</h2>'}, '测试', 'Test', '', [])
