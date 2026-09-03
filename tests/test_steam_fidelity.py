@@ -15,8 +15,7 @@ class SteamFidelityTests(unittest.TestCase):
         body = WORKER.game_body({'about_the_game': about, 'detailed_description': '<h2>评测和广告</h2>'}, '测试', 'Test', '', [])
         self.assertIn(about, body)
         self.assertNotIn('评测和广告', body)
-        self.assertTrue(body.startswith('<!-- wp:html -->'))
-        self.assertTrue(body.endswith('<!-- /wp:html -->'))
+        self.assertFalse(body.startswith('<!-- wp:html -->'))
 
     def test_preserves_paragraph_heading_list_and_break_structure(self):
         about = '<h2 class="bb_tag">第一节</h2><p class="bb_paragraph">A &amp; B</p><h3>小节</h3><ul><li>条目<br><br>续行</li></ul><p></p><h4>细节</h4><p>第二段</p>'

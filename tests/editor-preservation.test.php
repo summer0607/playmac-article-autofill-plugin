@@ -36,3 +36,14 @@ $ordinary = array('post_content'=>wp_slash('<p>Manual article</p>'),'post_type'=
 check(PlayMac_Article_Importer::restore_steam_editor($ordinary,array('ID'=>42)) === $ordinary, 'Manual removal ignored');
 check(PlayMac_Article_Importer::protect_steam_editor('<p>No Steam</p>', 'html') === '<p>No Steam</p>', 'Ordinary article changed');
 echo "Editor preservation checks passed.\n";
+$classic = "Intro\n\nSecond paragraph\n" . $about . "\n[ri-alerts]One\nTwo[/ri-alerts]";
+$masked = PlayMac_Article_Importer::protect_steam_render($classic);
+check(strpos($masked, $about) === false, 'Steam was not protected from paragraph conversion');
+check(strpos($masked, "[ri-alerts]One\nTwo[/ri-alerts]") !== false, 'Common body changed');
+$nested = PlayMac_Article_Importer::protect_steam_render('Nested' . $about);
+check(PlayMac_Article_Importer::restore_steam_render($nested) === 'Nested' . $about, 'Nested render source lost');
+check(PlayMac_Article_Importer::restore_steam_render($masked) === $classic, 'Steam render changed source');
+$multiple = $about . "\nMiddle\n" . $about;
+check(PlayMac_Article_Importer::restore_steam_render(PlayMac_Article_Importer::protect_steam_render($multiple)) === $multiple, 'Multiple Steam sections lost');
+check(PlayMac_Article_Importer::protect_steam_render('Plain\nText') === 'Plain\nText', 'Ordinary content changed');
+echo "Steam-only render preservation checks passed.\n";

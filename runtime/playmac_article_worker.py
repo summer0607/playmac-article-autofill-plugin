@@ -644,24 +644,22 @@ def game_body(info, chinese_name, english_name, cover, screenshots):
     release_date = html.escape(clean_text((info.get("release_date") or {}).get("date")) or "待填写")
     pieces = []
     if cover:
-        pieces.extend(["<!-- playmac-game-cover:start -->", f'<p><img decoding="async" src="{cover}" alt="{html.escape(chinese_name, quote=True)}" /></p>', "<!-- playmac-game-cover:end -->"])
+        pieces.extend(["<!-- playmac-game-cover:start -->", f'<img src="{html.escape(cover, quote=True)}" alt="" />', "<!-- playmac-game-cover:end -->", ""])
     pieces.extend([
-        f"<p>{description}</p>",
-        f"<p>发行日期：{release_date}</p>",
-        "&nbsp;",
-        "&nbsp;",
-        '<div class="playmac-game-common" style="white-space: pre-line;">' + GAME_ARTICLE_COMMON_HTML + '</div>',
+        description,
+        "",
+        f"发行日期：{release_date}",
+        GAME_ARTICLE_COMMON_HTML,
         '<h2><a id="%E5%85%B3%E4%BA%8E%E6%B8%B8%E6%88%8F" class="anchor" aria-hidden="true"></a>关于游戏</h2>',
         '<div class="playmac-steam-about">' + detailed + '</div>',
         '<h2><a id="%E6%B8%B8%E6%88%8F%E6%88%AA%E5%9B%BE" class="anchor" aria-hidden="true"></a>游戏截图</h2>',
     ])
     screenshots = unique_image_sources(screenshots, STEAM_SCREENSHOT_COUNT)
     if screenshots:
-        pieces.extend(f'<p><img decoding="async" src="{url}" alt="" /></p>' for url in screenshots)
+        pieces.extend(f'<img src="{html.escape(url, quote=True)}" alt="" />\n' for url in screenshots)
     else:
         pieces.append("<p>Steam 暂未提供游戏截图。</p>")
-    # Keep WordPress from splitting/merging Steam's original paragraphs.
-    return "<!-- wp:html -->\n" + "\n".join(pieces) + "\n<!-- /wp:html -->"
+    return "\n".join(pieces)
 
 
 def import_steam(app_id, session_path, skip_images=False):

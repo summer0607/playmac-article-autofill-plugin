@@ -49,6 +49,7 @@ def main():
                 "cookie"=>wp_generate_auth_cookie($id,time()+600,"logged_in",$token),
                 "auth_name"=>AUTH_COOKIE,"auth_cookie"=>wp_generate_auth_cookie($id,time()+600,"auth",$token),"url"=>home_url())) ;
         ''', {})
+        reference_common = php('echo json_encode(apply_filters("the_content", $data["body"]));', {"body": WORKER.GAME_ARTICLE_COMMON_HTML})
         with sync_playwright() as p:
             browser = p.chromium.launch()
             page = browser.new_page(viewport={"width": 1440, "height": 1000})
@@ -88,17 +89,29 @@ def main():
                 assert 'playmac-steam-original-' not in saved, 'Editor-only marker leaked into saved article'
                 page.goto(created["url"], wait_until="domcontentloaded")
                 page.locator('.playmac-steam-about').wait_for()
-                common = page.locator('.playmac-game-common')
-                common.wait_for()
-                assert common.evaluate("e => getComputedStyle(e).whiteSpace") == "pre-line"
+                common_format = page.evaluate('''reference => {
+                    const expected = document.createElement('template');
+                    expected.innerHTML = reference;
+                    const headings = Array.from(document.querySelectorAll('h2'));
+                    const start = headings.find(e => e.textContent.trim() === '经验建议');
+                    const end = headings.find(e => e.textContent.trim() === '关于游戏');
+                    const range = document.createRange();
+                    range.setStartBefore(start); range.setEndBefore(end);
+                    const actual = range.cloneContents();
+                    const signature = root => Array.from(root.querySelectorAll('h2,h3,p,li,br,blockquote'))
+                        .map(e => [e.tagName, e.textContent.replace(/\\s+/g, ' ').trim()]);
+                    return {same: JSON.stringify(signature(actual)) === JSON.stringify(signature(expected.content)),
+                        actual: signature(actual), expected: signature(expected.content)};
+                }''', reference_common)
+                assert common_format['same'], ('Common template formatting changed after editor save', common_format)
                 alert = page.locator('.ri-alerts-shortcode .alert').first
                 alert_lines = alert.evaluate('''e => {
                     const range = document.createRange();
-                    const text = Array.from(e.childNodes).find(n => n.nodeType === Node.TEXT_NODE && n.textContent.includes('【其他说明】'));
+                    const text = Array.from(e.childNodes).find(n => n.nodeType === Node.TEXT_NODE && n.textContent.includes('1.第一次打开游戏'));
                     range.selectNodeContents(text);
                     return new Set(Array.from(range.getClientRects()).map(r => Math.round(r.top))).size;
                 }''')
-                assert alert_lines >= 3, 'Attention notes lost their visible line breaks'
+                assert alert_lines >= 2, 'Attention notes lost their visible line breaks'
                 result = page.evaluate('''(source) => {
                     const template = document.createElement('template');
                     template.innerHTML = source;

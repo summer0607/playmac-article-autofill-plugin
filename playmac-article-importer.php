@@ -2,7 +2,7 @@
 /**
  * Plugin Name: PlayMac 文章自动补全
  * Description: 从 Steam 或 Macked 链接生成 PlayMac 游戏、软件文章草稿，并使用已验证的千帆图片外链。
- * Version: 3.1.7
+ * Version: 3.1.9
  * Author: PlayMac
  */
 
@@ -10,7 +10,7 @@ defined('ABSPATH') || exit;
 
 final class PlayMac_Article_Importer
 {
-    private const VERSION = '3.1.7';
+    private const VERSION = '3.1.9';
     private const AJAX_ACTION = 'playmac_article_import';
     private const AJAX_STATUS_ACTION = 'playmac_article_import_status';
     private const AJAX_QR_START_ACTION = 'playmac_qianfan_qr_start';
@@ -23,6 +23,8 @@ final class PlayMac_Article_Importer
     private const META_SOURCE_KIND = '_playmac_import_source_kind';
     private const META_MISSING = '_playmac_import_missing_fields';
     private const META_JOB_ID = '_playmac_import_job_id';
+    private static $steam_render_sources = array();
+    private static $steam_render_sequence = 0;
 
     public static function boot(): void
     {
@@ -47,6 +49,32 @@ final class PlayMac_Article_Importer
         add_filter('wp_kses_allowed_html', array(__CLASS__, 'allow_steam_video_attributes'), 10, 2);
         add_filter('the_editor_content', array(__CLASS__, 'protect_steam_editor'), 1, 2);
         add_filter('wp_insert_post_data', array(__CLASS__, 'restore_steam_editor'), 99, 2);
+        add_filter('the_content', array(__CLASS__, 'protect_steam_render'), 8);
+        add_filter('the_content', array(__CLASS__, 'restore_steam_render'), 12);
+    }
+
+    /** Keep WordPress paragraph formatting for the template, not Steam HTML. */
+    public static function protect_steam_render(string $content): string
+    {
+        while ($section = self::steam_section($content, 'playmac-steam-about')) {
+            do {
+                $marker = '<div id="playmac-steam-render-' . ++self::$steam_render_sequence . '"></div>';
+            } while (strpos($content, $marker) !== false);
+            self::$steam_render_sources[$marker] = $section['html'];
+            $content = substr_replace($content, $marker, $section['offset'], $section['length']);
+        }
+        return $content;
+    }
+
+    public static function restore_steam_render(string $content): string
+    {
+        foreach (self::$steam_render_sources as $marker => $source) {
+            if (strpos($content, $marker) !== false) {
+                $content = str_replace($marker, $source, $content);
+                unset(self::$steam_render_sources[$marker]);
+            }
+        }
+        return $content;
     }
 
     /** Locate a complete wrapper without reserializing its original HTML. */

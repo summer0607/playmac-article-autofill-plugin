@@ -1,4 +1,5 @@
 import importlib.util
+import hashlib
 import json
 import tempfile
 import unittest
@@ -25,6 +26,13 @@ class Response:
 
 
 class RuntimeWorkerTests(unittest.TestCase):
+    def test_common_template_matches_supplied_reference(self):
+        # Exact shared sections from the supplied sample; game-specific DLC,
+        # plot and real-device screenshots must not leak into other games.
+        template = WORKER_PATH.with_name('game_article_common.html').read_bytes()
+        self.assertEqual(hashlib.sha256(template).hexdigest(),
+                         'eccf467d8638da08b38a5dfe3b7ff5c0845311dc17d9f0d61b42dfcee70a5a1c')
+
     STEAM_LANGUAGE_TABLE = """
     <table class="game_language_options">
       <tr><th></th><th>界面</th><th>完全音频</th><th>字幕</th></tr>
@@ -189,12 +197,13 @@ class RuntimeWorkerTests(unittest.TestCase):
         finally:
             WORKER.request = original
             WORKER.steam_store_page = original_store_page
-        expected_sections = ["一款动作冒险游戏。", "发行日期：2026 年 2 月 27 日", "经验建议", "注意事项", "安装方法", "常见问题", "关于游戏", "游戏截图"]
+        expected_sections = ["一款动作冒险游戏。", "发行日期：2026 年 2 月 27 日", "经验建议", "注意事项", "安装方法", "相关说明", "常见问题", "关于游戏", "游戏截图"]
         positions = [article["content"].index(section) for section in expected_sections]
         self.assertEqual(positions, sorted(positions))
         self.assertIn("Macs Fan Control", article["content"])
-        self.assertIn("【其他说明】", article["content"])
-        self.assertIn('<div class="playmac-game-common" style="white-space: pre-line;">', article["content"])
+        self.assertNotIn("【其他说明】", article["content"])
+        self.assertNotIn("playmac-game-common", article["content"])
+        self.assertIn("拖到「应用程序（Applications）」即可。", article["content"])
         self.assertIn("2025年9月25日后发布的游戏内置了“CE修改器”", article["content"])
         self.assertNotIn("配置要求", article["content"])
         self.assertNotIn("软件介绍", article["content"])
