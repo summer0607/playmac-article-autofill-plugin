@@ -2,7 +2,7 @@
 /**
  * Plugin Name: PlayMac 文章自动补全
  * Description: 从 Steam 或 Macked 链接生成 PlayMac 游戏、软件文章草稿，并使用已验证的千帆图片外链。
- * Version: 3.1.6
+ * Version: 3.1.7
  * Author: PlayMac
  */
 
@@ -10,7 +10,7 @@ defined('ABSPATH') || exit;
 
 final class PlayMac_Article_Importer
 {
-    private const VERSION = '3.1.6';
+    private const VERSION = '3.1.7';
     private const AJAX_ACTION = 'playmac_article_import';
     private const AJAX_STATUS_ACTION = 'playmac_article_import_status';
     private const AJAX_QR_START_ACTION = 'playmac_qianfan_qr_start';
@@ -45,6 +45,66 @@ final class PlayMac_Article_Importer
         add_filter('plugin_action_links_' . plugin_basename(__FILE__), array(__CLASS__, 'add_update_link'));
         add_action('wp_enqueue_scripts', array(__CLASS__, 'enqueue_steam_media'));
         add_filter('wp_kses_allowed_html', array(__CLASS__, 'allow_steam_video_attributes'), 10, 2);
+        add_filter('the_editor_content', array(__CLASS__, 'protect_steam_editor'), 1, 2);
+        add_filter('wp_insert_post_data', array(__CLASS__, 'restore_steam_editor'), 99, 2);
+    }
+
+    /** Locate a complete wrapper without reserializing its original HTML. */
+    private static function steam_section(string $html, string $class): ?array
+    {
+        if (!preg_match('/<div\b[^>]*\bclass\s*=\s*([\'\"])(?:(?!\1).)*\b' . preg_quote($class, '/') . '\b(?:(?!\1).)*\1[^>]*>/is', $html, $start, PREG_OFFSET_CAPTURE)) {
+            return null;
+        }
+        $offset = $start[0][1];
+        $depth = 0;
+        preg_match_all('/<\/?div\b[^>]*>/i', substr($html, $offset), $tags, PREG_OFFSET_CAPTURE);
+        foreach ($tags[0] as $tag) {
+            $depth += strpos($tag[0], '</') === 0 ? -1 : 1;
+            if ($depth === 0) {
+                $length = $tag[1] + strlen($tag[0]);
+                return array('offset' => $offset, 'length' => $length, 'html' => substr($html, $offset, $length));
+            }
+        }
+        return null;
+    }
+
+    public static function protect_steam_editor(string $content, string $default_editor): string
+    {
+        global $post;
+        if (!in_array($default_editor, array('html', 'tinymce'), true) || !$post instanceof WP_Post || $post->post_type !== 'post') {
+            return $content;
+        }
+        $section = self::steam_section($content, 'playmac-steam-about');
+        if (!$section || !$post->ID) {
+            return $content;
+        }
+        // The visual editor can normalize markup even when nobody edits it.
+        // Display a read-only copy; restore the saved source on a normal save.
+        $protected = preg_replace('/^<div\b[^>]*>/i', '<div class="playmac-steam-about playmac-steam-original-' . (int) $post->ID . '" contenteditable="false">', $section['html'], 1);
+        return substr_replace($content, $protected, $section['offset'], $section['length']);
+    }
+
+    public static function restore_steam_editor(array $data, array $postarr): array
+    {
+        $post_id = (int) ($postarr['ID'] ?? 0);
+        if (($data['post_type'] ?? '') === 'revision') {
+            $post_id = (int) ($postarr['post_parent'] ?? 0);
+        }
+        if (!$post_id || empty($data['post_content'])) {
+            return $data;
+        }
+        $content = wp_unslash($data['post_content']);
+        $edited = self::steam_section($content, 'playmac-steam-original-' . $post_id);
+        if (!$edited) {
+            return $data;
+        }
+        $original = self::steam_section((string) get_post_field('post_content', $post_id, 'raw'), 'playmac-steam-about');
+        if (!$original) {
+            return $data;
+        }
+        $content = substr_replace($content, wp_kses_post($original['html']), $edited['offset'], $edited['length']);
+        $data['post_content'] = wp_slash($content);
+        return $data;
     }
 
     public static function allow_steam_video_attributes(array $tags, $context): array
@@ -225,6 +285,9 @@ final class PlayMac_Article_Importer
                 <button type="button" class="button button-primary" id="playmac-import-start">获取资料并保存草稿</button>
             </div>
             <p class="playmac-article-importer__status" id="playmac-import-status" role="status" aria-live="polite"></p>
+            <?php if (strpos((string) $post->post_content, 'playmac-steam-about') !== false): ?>
+                <p>“关于游戏”按 Steam 原文保护，保存时保留原标题、段落和动态媒体。可在前端预览完整效果；需要更新原文时请重新获取资料。</p>
+            <?php endif; ?>
             <?php if ($missing): ?>
                 <p class="playmac-article-importer__missing">发布前还需填写：<?php echo esc_html(implode('、', $missing)); ?></p>
             <?php endif; ?>

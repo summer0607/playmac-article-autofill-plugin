@@ -9,6 +9,7 @@
 - 图片：封面和五张独立商店截图仍上传并验证千帆外链；“关于游戏”内的图片（包括 GIF/动态 AVIF）和视频保留 Steam 原链接，不转存、不转码。
 - 视频：仅对“关于游戏”内的视频强制静音、自动播放、行内播放、隐藏播放控件并禁止右键，不影响文章其他视频。浏览器省电/用户策略可能阻止自动播放，右键限制不等于防下载。
 - 排版：正文以原始 HTML 区块保存，防止 WordPress 改变 Steam 段落；过滤不安全代码并补齐异常标签，避免影响后面的截图区域。
+- 编辑保护：可视化编辑器中的“关于游戏”为只读原文，普通保存及自动保存不会改变其标题、段落或媒体结构；其余文章内容可正常编辑，更新 Steam 原文请重新获取资料。
 - 适用范围：新导入或主动重新补全的文章；不自动改写历史文章，不改价格和下载链接。编辑已有文章时仍须确认覆盖标题和正文。
 - 千帆：在插件设置页获取官方二维码，用小红书 APP 扫码登录；账号密码登录仅作为备用。登录会话保存在独立数据卷中。
 - Macked：插件直接读取并解析；无法可靠读取时不会保存草稿，也不会使用旧缓存替代。
@@ -38,11 +39,13 @@ docker compose up -d
 
 升级 3.1.6 时需要同时更新插件和常驻组件（建议固定使用同版本镜像标签）。数据卷无需更换，保留千帆会话和任务；正在处理的任务应完成后再更新服务。只更新 WordPress 插件不会更新服务器的 Steam 提取逻辑。
 
+3.1.7 仅修复 WordPress 编辑器保存，可以继续使用 3.1.6 常驻组件，无需再次更新服务器镜像。
+
 ## 测试
 
-常规检查：`python3 -m unittest discover -s tests -v`、`node --test tests/frontend.test.cjs`、`php -l playmac-article-importer.php`。
+常规检查：`python3 -m unittest discover -s tests -v`、`node --test tests/frontend.test.cjs`、`php -l playmac-article-importer.php`、`php tests/editor-preservation.test.php`。
 
-已有 PlayMac 本地站和 Playwright 测试环境可运行 `python3 tests/smoke_frontend.py`，读取真实 Steam 内容并验证保存、前端排版、原始媒体链接和视频实际播放；测试仅允许写入本地站，结束后删除自身创建的测试文章，不操作正式站或千帆。
+已有 PlayMac 本地站和 Playwright 测试环境可运行 `python3 tests/smoke_frontend.py`，读取真实 Steam 内容并验证可视化编辑器再次保存、前端排版、原始媒体链接和视频实际播放；测试仅允许写入本地站，结束后删除自身创建的测试文章及临时登录会话，不操作正式站或千帆。
 
 ## 发布新版本
 

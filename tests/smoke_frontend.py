@@ -38,10 +38,24 @@ def php(code, data):
 
 def main():
     ids = []
+    session = None
     try:
+        session = php('''
+            $users = get_users(array("role"=>"administrator", "number"=>1));
+            if (!$users) throw new RuntimeException("Local admin missing");
+            $id = $users[0]->ID;
+            $token = WP_Session_Tokens::get_instance($id)->create(time()+600);
+            echo json_encode(array("id"=>$id,"token"=>$token,"name"=>LOGGED_IN_COOKIE,
+                "cookie"=>wp_generate_auth_cookie($id,time()+600,"logged_in",$token),
+                "auth_name"=>AUTH_COOKIE,"auth_cookie"=>wp_generate_auth_cookie($id,time()+600,"auth",$token),"url"=>home_url())) ;
+        ''', {})
         with sync_playwright() as p:
             browser = p.chromium.launch()
             page = browser.new_page(viewport={"width": 1440, "height": 1000})
+            page.context.add_cookies([
+                {"name": session["name"], "value": session["cookie"], "url": session["url"]},
+                {"name": session["auth_name"], "value": session["auth_cookie"], "url": session["url"]},
+            ])
             # Keep analytics and unrelated theme services out of this local test.
             page.route("**/*", lambda route: route.continue_() if (
                 (urlparse(route.request.url).hostname or "") in {"localhost", "127.0.0.1"}
@@ -60,6 +74,18 @@ def main():
                     echo json_encode(array("id" => $id, "url" => get_permalink($id)));
                 ''', {"body": body})
                 ids.append(created["id"])
+                # A real visual-editor save previously stripped picture/source,
+                # empty paragraphs, and other original Steam structure.
+                page.goto(f'{session["url"]}/wp-admin/post.php?post={created["id"]}&action=edit')
+                page.locator('#content-tmce').click()
+                locked = page.frame_locator('#content_ifr').locator('.playmac-steam-about')
+                locked.wait_for()
+                assert locked.get_attribute('contenteditable') == 'false'
+                page.locator('#publish').click()
+                page.wait_for_url('**/post.php?post=**&action=edit&message=1')
+                saved = php('echo json_encode(get_post_field("post_content", $data["id"]));', {"id": created["id"]})
+                assert WORKER.steam_about_game(info) in saved, 'Visual editor changed original Steam HTML'
+                assert 'playmac-steam-original-' not in saved, 'Editor-only marker leaked into saved article'
                 page.goto(created["url"], wait_until="domcontentloaded")
                 page.locator('.playmac-steam-about').wait_for()
                 result = page.evaluate('''(source) => {
@@ -90,9 +116,11 @@ def main():
                     assert state == {"muted": True, "volume": 0, "autoplay": True, "controls": False, "inline": True, "rightClickBlocked": True}, state
                     if index == 0:
                         video.screenshot(path="/tmp/playmac-steam-video-verified.png")
-                print(json.dumps({"app_id": app_id, "source_length": len(about), **result, "playing_videos": videos.count()}, ensure_ascii=False), flush=True)
+                print(json.dumps({"app_id": app_id, "source_length": len(about), **result, "editor_roundtrip": True, "playing_videos": videos.count()}, ensure_ascii=False), flush=True)
             browser.close()
     finally:
+        if session:
+            php('WP_Session_Tokens::get_instance($data["id"])->destroy($data["token"]); echo "true";', session)
         if ids:
             cleaned = php('''
                 $removed = array();
