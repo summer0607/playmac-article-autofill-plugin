@@ -80,21 +80,15 @@ class RuntimeWorkerTests(unittest.TestCase):
 
             original_load_session = WORKER.load_session
             original_verify = WORKER.verify_qianfan
-            original_folder = WORKER.qianfan_folder
-            original_find_link = WORKER.qianfan_find_link
             original_get = WORKER.requests.get
             WORKER.load_session = lambda _path: "cookie"
             WORKER.verify_qianfan = lambda _cookie: None
-            WORKER.qianfan_folder = lambda _cookie, _folder: "folder-id"
-            WORKER.qianfan_find_link = lambda *_args: self.fail("已有内容指纹时不应查询或上传千帆图片")
             WORKER.requests.get = lambda *_args, **_kwargs: ImageResponse()
             try:
                 self.assertEqual(WORKER.upload_images(session_path, [image_path]), [link])
             finally:
                 WORKER.load_session = original_load_session
                 WORKER.verify_qianfan = original_verify
-                WORKER.qianfan_folder = original_folder
-                WORKER.qianfan_find_link = original_find_link
                 WORKER.requests.get = original_get
 
     def test_qianfan_login_switches_to_account_form(self):

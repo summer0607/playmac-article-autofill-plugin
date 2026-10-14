@@ -351,32 +351,26 @@ def login_with_qr(session_path, update_state, timeout=180):
             browser.close()
 
 
-def qianfan_folder(cookie, folder):
-    payload = {"filter": {"keyword": "", "statuses": [1], "basicTypes": [1], "fatherDirectoryId": -1}, "pageIndex": 1, "pageSize": 50, "option": {"withDetail": True}}
-    response = requests.post(f"{QIANFAN_API}/search_directory_manageable", headers=qianfan_headers(cookie, True), json=payload, timeout=30)
-    response.raise_for_status()
-    for item in (response.json().get("data") or {}).get("directoryManageables", []):
-        if item.get("name") == folder:
-            return str(item.get("id"))
-    raise WorkerError("千帆中未找到 PlayMac 图片目录")
-
-
-def qianfan_find_link(cookie, folder_id, filename):
-    payload = {"filter": {"keyword": Path(filename).stem, "statuses": [1], "basicTypes": [2], "fatherDirectoryId": folder_id}, "order": {"orderList": [{"field": "createTime", "asc": False}]}, "pageIndex": 1, "pageSize": 100, "option": {"withDetail": True}}
-    response = requests.post(f"{QIANFAN_API}/search_directory_manageable", headers=qianfan_headers(cookie, True), json=payload, timeout=30)
-    response.raise_for_status()
-    for item in (response.json().get("data") or {}).get("directoryManageables", []):
-        if item.get("name") not in {filename, Path(filename).stem}:
+def qianfan_find_page_link(page, filename):
+    """Use the authenticated web UI so platform request signing stays intact."""
+    keyword = Path(filename).stem
+    page.get_by_placeholder("请输入关键词", exact=True).fill(keyword)
+    page.get_by_text("搜索", exact=True).click()
+    page.wait_for_timeout(1000)
+    rows = page.get_by_role("row")
+    for index in range(1, rows.count()):
+        row = rows.nth(index)
+        # Search is fuzzy: never reuse a different image from the result list.
+        names = {line.strip() for line in row.inner_text().splitlines()}
+        if not names.intersection({filename, keyword}):
             continue
-        data = item.get("additionalData") or {}
-        if data.get("link"):
-            return str(data["link"])
-        try:
-            uploader = data.get("uploaderInfoModel") or {}
-            uploader = json.loads(uploader) if isinstance(uploader, str) else uploader
-            return str(uploader.get("url") or "")
-        except (TypeError, ValueError, json.JSONDecodeError):
-            pass
+        page.evaluate("navigator.clipboard.writeText('')")
+        row.get_by_text("复制链接", exact=True).click()
+        page.wait_for_timeout(300)
+        link = page.evaluate("navigator.clipboard.readText()")
+        if not re.match(r"^https://qimg\.xiaohongshu\.com/", str(link or "")):
+            raise WorkerError("千帆未返回有效图片外链")
+        return link
     return ""
 
 
@@ -405,7 +399,6 @@ def qianfan_image_available(link):
 def upload_images(session_path, images, folder="PlayMac"):
     cookie = load_session(session_path)
     verify_qianfan(cookie)
-    folder_id = qianfan_folder(cookie, folder)
     index_path = Path(session_path).with_name("qianfan-image-index.json")
     image_index = load_qianfan_image_index(index_path)
     image_paths = deduplicate_image_files(images)
@@ -417,9 +410,7 @@ def upload_images(session_path, images, folder="PlayMac"):
         link = image_index.get(fingerprint, "")
         if not qianfan_image_available(link):
             image_index.pop(fingerprint, None)
-            link = qianfan_find_link(cookie, folder_id, filename)
-        if not link and path.name != filename:
-            link = qianfan_find_link(cookie, folder_id, path.name)
+            link = ""
         if qianfan_image_available(link):
             image_index[fingerprint] = link
             save_qianfan_image_index(index_path, image_index)
@@ -442,6 +433,17 @@ def upload_images(session_path, images, folder="PlayMac"):
         page.get_by_text(folder, exact=True).first.click()
         page.wait_for_timeout(800)
         for position, path, fingerprint, filename in pending:
+            link = qianfan_find_page_link(page, filename)
+            if not link and path.name != filename:
+                link = qianfan_find_page_link(page, path.name)
+            if qianfan_image_available(link):
+                image_index[fingerprint] = link
+                save_qianfan_image_index(index_path, image_index)
+                results[position] = link
+                continue
+            page.get_by_placeholder("请输入关键词", exact=True).fill("")
+            page.get_by_text("搜索", exact=True).click()
+            page.wait_for_timeout(500)
             page.get_by_text("上传本地图片", exact=True).click()
             picker = page.locator('input[type="file"]')
             upload_path = path.with_name(filename)
@@ -454,7 +456,7 @@ def upload_images(session_path, images, folder="PlayMac"):
                 close.click()
             link = ""
             for _ in range(12):
-                link = qianfan_find_link(cookie, folder_id, filename)
+                link = qianfan_find_page_link(page, filename)
                 if link:
                     break
                 page.wait_for_timeout(500)
