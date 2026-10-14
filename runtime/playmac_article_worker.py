@@ -356,7 +356,11 @@ def qianfan_find_page_link(page, filename):
     keyword = Path(filename).stem
     page.get_by_placeholder("请输入关键词", exact=True).fill(keyword)
     with page.expect_response(
-        lambda response: "/material_space/search_directory_manageable" in response.url,
+        lambda response: (
+            "/material_space/search_directory_manageable" in response.url
+            and response.request.method == "POST"
+            and ((response.request.post_data_json or {}).get("filter") or {}).get("keyword") == keyword
+        ),
         timeout=30000,
     ) as pending:
         page.get_by_text("搜索", exact=True).click()
@@ -368,7 +372,9 @@ def qianfan_find_page_link(page, filename):
     if response.status != 200 or not result.get("success") or result.get("code") not in {0, 200}:
         raise WorkerError("千帆图片查询失败，请检查登录或稍后重试")
     for item in (result.get("data") or {}).get("directoryManageables", []):
-        if Path(str(item.get("name") or "")).stem != keyword:
+        name = str(item.get("name") or "")
+        converted_extension = Path(name).suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}
+        if name not in {filename, keyword} and not (converted_extension and Path(name).stem == keyword):
             continue
         data = item.get("additionalData") or {}
         link = data.get("link")

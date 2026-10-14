@@ -19,6 +19,21 @@ class QianfanUiTests(unittest.TestCase):
         page.get_by_role.assert_not_called()
         page.get_by_text.assert_called_once_with('搜索', exact=True)
 
+    def test_extensionless_name_preserves_version_dots(self):
+        page, _ = self.page('Color-Hound-1.9.6-cover-abc')
+        self.assertTrue(WORKER.qianfan_find_page_link(page, 'Color-Hound-1.9.6-cover-abc.png'))
+
+    def test_ignores_inflight_results_for_previous_keyword(self):
+        page, _ = self.page('sha256-abc')
+        WORKER.qianfan_find_page_link(page, 'sha256-abc.jpg')
+        predicate = page.expect_response.call_args.args[0]
+        response = Mock(url='https://ark.xiaohongshu.com/api/edith/product/material_space/search_directory_manageable')
+        response.request.method = 'POST'
+        response.request.post_data_json = {'filter': {'keyword': ''}}
+        self.assertFalse(predicate(response))
+        response.request.post_data_json = {'filter': {'keyword': 'sha256-abc'}}
+        self.assertTrue(predicate(response))
+
     def test_platform_extension_conversion_reuses_same_image(self):
         page, _ = self.page('sha256-abc.jpg')
         self.assertTrue(WORKER.qianfan_find_page_link(page, 'sha256-abc.png'))
