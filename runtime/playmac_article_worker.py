@@ -352,25 +352,36 @@ def login_with_qr(session_path, update_state, timeout=180):
 
 
 def qianfan_find_page_link(page, filename):
-    """Use the authenticated web UI so platform request signing stays intact."""
+    """Read the signed search response produced by the official web UI."""
     keyword = Path(filename).stem
     page.get_by_placeholder("请输入关键词", exact=True).fill(keyword)
-    page.get_by_text("搜索", exact=True).click()
-    page.wait_for_timeout(1000)
-    rows = page.get_by_role("row")
-    for index in range(1, rows.count()):
-        row = rows.nth(index)
-        # Search is fuzzy: never reuse a different image from the result list.
-        names = {line.strip() for line in row.inner_text().splitlines()}
-        if not names.intersection({filename, keyword}):
+    with page.expect_response(
+        lambda response: "/material_space/search_directory_manageable" in response.url,
+        timeout=30000,
+    ) as pending:
+        page.get_by_text("搜索", exact=True).click()
+    response = pending.value
+    try:
+        result = response.json()
+    except ValueError as exc:
+        raise WorkerError("千帆图片查询失败，请检查登录或稍后重试") from exc
+    if response.status != 200 or not result.get("success") or result.get("code") not in {0, 200}:
+        raise WorkerError("千帆图片查询失败，请检查登录或稍后重试")
+    for item in (result.get("data") or {}).get("directoryManageables", []):
+        if Path(str(item.get("name") or "")).stem != keyword:
             continue
-        page.evaluate("navigator.clipboard.writeText('')")
-        row.get_by_text("复制链接", exact=True).click()
-        page.wait_for_timeout(300)
-        link = page.evaluate("navigator.clipboard.readText()")
+        data = item.get("additionalData") or {}
+        link = data.get("link")
+        if not link:
+            uploader = data.get("uploaderInfoModel") or {}
+            try:
+                uploader = json.loads(uploader) if isinstance(uploader, str) else uploader
+                link = uploader.get("url")
+            except (TypeError, ValueError, AttributeError):
+                raise WorkerError("千帆图片链接格式异常")
         if not re.match(r"^https://qimg\.xiaohongshu\.com/", str(link or "")):
             raise WorkerError("千帆未返回有效图片外链")
-        return link
+        return str(link)
     return ""
 
 
@@ -454,6 +465,11 @@ def upload_images(session_path, images, folder="PlayMac"):
             close = page.get_by_text("关闭", exact=True)
             if close.count():
                 close.click()
+            # Upload completion can reset the listing; reopen the target folder.
+            page.reload(wait_until="domcontentloaded", timeout=60000)
+            page.get_by_text("上传本地图片", exact=True).wait_for(state="visible", timeout=30000)
+            page.get_by_text(folder, exact=True).first.click()
+            page.wait_for_timeout(1200)
             link = ""
             for _ in range(12):
                 link = qianfan_find_page_link(page, filename)
